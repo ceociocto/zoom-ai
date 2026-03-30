@@ -1,0 +1,43 @@
+# Core dependencies
+numpy>=1.24.0
+opencv-python>=4.8.0
+pillow>=10.0.0
+
+# Audio processing
+librosa>=0.10.0
+soundfile>=0.12.0
+pyaudio>=0.2.13
+
+# TTS
+edge-tts>=6.1.0
+# Optional: Coqui TTS
+# TTS>=0.22.0
+
+# Virtual camera (Linux)
+pyv4l2>=0.1.0
+
+# Zoom SDK / Bot
+# Option 1: Playwright for web automation
+playwright>=1.40.0
+# Option 2: Zoom Meeting SDK (requires license)
+# zoom-meeting-sdk>=1.0.0
+
+# Avatar generation
+torch>=2.0.0
+torchvision>=0.15.0
+transformers>=4.35.0
+# SadTalker dependencies will be installed separately
+
+# Utilities
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+loguru>=0.7.0
+httpx>=0.25.0
+
+# Video processing
+ffmpeg-python>=0.2.0
+av>=11.0.0
+
+# Async
+asyncio>=3.4.3
+aiohttp>=3.9.0

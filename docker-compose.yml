@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: zoom-ai-bot:latest
+    container_name: zoom-ai-bot
+    restart: unless-stopped
+
+    # 权限配置 - 访问摄像头设备
+    privileged: true
+    group_add:
+      - video
+
+    # 环境变量
+    env_file:
+      - .env
+    environment:
+      - MEETING_ID=${MEETING_ID}
+      - MEETING_PASSWORD=${MEETING_PASSWORD}
+      - BOT_NAME=${BOT_NAME:-AI Assistant}
+      - DEVICE_INDEX=${DEVICE_INDEX:-0}
+
+    # 挂载卷
+    volumes:
+      - ./assets:/app/assets:ro
+      - ./logs:/app/logs
+      - ./config:/app/config:ro
+      - /dev/video0:/dev/video0
+      - /dev/video1:/dev/video1
+      - /dev/video2:/dev/video2
+      - /dev/video3:/dev/video3
+
+    # GPU支持 (可选，用于虚拟人渲染加速)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+    command: python -m zoom_ai.bot
+    # 多实例时可以覆盖:
+    # command: python -m zoom_ai.bot --device=/dev/video1
+
+networks:
+  default:
+    name: zoom-ai-network
