@@ -197,6 +197,42 @@ def setup_parser() -> argparse.ArgumentParser:
         help="Virtual camera device (default: auto-detect)",
     )
 
+    # Enhanced WLK + Camera test command (with Chinese support)
+    wlk_enhanced_parser = subparsers.add_parser("test-wlk-enhanced", help="Test Enhanced WLK + Virtual Camera with Chinese support and multiple styles")
+    wlk_enhanced_parser.add_argument(
+        "--server-url", "-s",
+        default="ws://localhost:8000/asr",
+        help="WhisperLiveKit server WebSocket URL",
+    )
+    wlk_enhanced_parser.add_argument(
+        "--duration", "-d",
+        type=int,
+        default=60,
+        help="Duration to run the test (seconds)",
+    )
+    wlk_enhanced_parser.add_argument(
+        "--language", "-l",
+        default="zh",
+        help="Language code (zh, en, auto, etc.)",
+    )
+    wlk_enhanced_parser.add_argument(
+        "--style",
+        choices=["modern", "chat", "karaoke", "subtitle"],
+        default="modern",
+        help="Caption display style (default: modern)",
+    )
+    wlk_enhanced_parser.add_argument(
+        "--diarization",
+        action="store_true",
+        default=True,
+        help="Enable speaker identification (default: True)",
+    )
+    wlk_enhanced_parser.add_argument(
+        "--no-diarization",
+        action="store_true",
+        help="Disable speaker identification",
+    )
+
     return parser
 
 
@@ -463,6 +499,27 @@ async def cmd_test_wlk_camera(args: argparse.Namespace):
     return exit_code
 
 
+async def cmd_test_wlk_enhanced(args: argparse.Namespace):
+    """Handle test-wlk-enhanced command - Enhanced WLK + Virtual Camera with Chinese support."""
+    from zoom_ai.wlk_enhanced_overlay import test_enhanced_wlk_camera, CaptionStyle
+
+    logger.info("Testing Enhanced WLK + Virtual Camera...")
+    logger.info(f"Server: {args.server_url}")
+    logger.info(f"Duration: {args.duration} seconds")
+    logger.info(f"Language: {args.language}")
+    logger.info(f"Style: {args.style}")
+    logger.info(f"Diarization: {not args.no_diarization}")
+
+    exit_code = await test_enhanced_wlk_camera(
+        wlk_server_url=args.server_url,
+        language=args.language,
+        diarization=not args.no_diarization,
+        duration=args.duration,
+        style=args.style,
+    )
+    return exit_code
+
+
 async def cmd_test_avatar(args: argparse.Namespace):
     """Handle test-avatar command."""
     from zoom_ai.avatar import AvatarRendererFactory
@@ -531,6 +588,9 @@ def main():
         sys.exit(exit_code)
     elif args.command == "test-wlk-camera":
         exit_code = asyncio.run(cmd_test_wlk_camera(args))
+        sys.exit(exit_code)
+    elif args.command == "test-wlk-enhanced":
+        exit_code = asyncio.run(cmd_test_wlk_enhanced(args))
         sys.exit(exit_code)
     else:
         parser.print_help()

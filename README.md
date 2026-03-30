@@ -124,7 +124,37 @@ uv run python -m zoom_ai.cli test-wlk-camera --diarization --duration 60
 - 可选说话人识别（需要 NeMo）
 - 字幕叠加显示在虚拟摄像头
 
-### 5. 测试中文字符显示
+### 5. 测试增强版 WLK 字幕（推荐）⭐
+支持中文显示、多种字幕样式和动画效果：
+```bash
+# 先启动 WLK 服务器（终端1）
+uv run wlk --model base --language zh
+
+# 测试增强版字幕（终端2）- Modern 风格
+uv run python -m zoom_ai.cli test-wlk-enhanced --style modern --duration 60
+
+# 其他风格选项
+uv run python -m zoom_ai.cli test-wlk-enhanced --style chat --duration 60      # 聊天气泡风格
+uv run python -m zoom_ai.cli test-wlk-enhanced --style karaoke --duration 60  # 卡拉OK风格
+uv run python -m zoom_ai.cli test-wlk-enhanced --style subtitle --duration 60 # 传统字幕风格
+```
+**效果**:
+- ✅ 完美中文显示
+- ✅ 说话人自动识别和颜色标记
+- ✅ 流畅的淡入/滑动动画
+- ✅ 现代化 UI 设计（圆角边框、阴影）
+- ✅ 多种字幕样式可选
+- ✅ 虚拟摄像头实时输出
+
+**字幕样式对比**:
+| 样式 | 特点 | 适用场景 |
+|-----|------|---------|
+| `modern` | 浮动卡片、说话人标签 | 正式会议、演示 |
+| `chat` | 聊天气泡风格 | 轻松讨论、聊天 |
+| `karaoke` | 居中显示、大字号 | 演讲、表演 |
+| `subtitle` | 传统字幕样式 | 通用场景 |
+
+### 6. 测试中文字符显示
 验证虚拟摄像头是否能正确渲染中文：
 ```bash
 python test_chinese_camera.py
@@ -133,12 +163,13 @@ python test_chinese_camera.py
 
 ## 测试效果对比
 
-| 测试方式 | 延迟 | 说话人识别 | 显示位置 | 推荐场景 |
-|---------|-----|-----------|---------|---------|
-| DOM 字幕 | 低 | × | 终端 | 需要 Zoom 会议 |
-| Whisper | 中(3-5s) | × | 终端/摄像头 | 简单转录 |
-| WLK 流式 | 低(<500ms) | ✓ | 终端/摄像头 | 实时会议 |
-| Whisper+摄像头 | 中(3-5s) | × | 摄像头 | 离线演示 |
+| 测试方式 | 延迟 | 说话人识别 | 中文支持 | 显示位置 | 推荐场景 |
+|---------|-----|-----------|---------|---------|---------|
+| DOM 字幕 | 低 | × | ✓ | 终端 | 需要 Zoom 会议 |
+| Whisper | 中(3-5s) | × | ✓ | 终端/摄像头 | 简单转录 |
+| WLK 流式 | 低(<500ms) | ✓ | × | 终端/摄像头 | 实时会议 |
+| WLK 增强版 | 低(<500ms) | ✓ | ✓ | 摄像头 | **推荐** |
+| Whisper+摄像头 | 中(3-5s) | × | ✓ | 摄像头 | 离线演示 |
 
 ### 字幕读取功能
 
