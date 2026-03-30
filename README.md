@@ -72,6 +72,74 @@ uv run python -m zoom_ai.cli start --meeting-id "xxx" --meeting-password "xxx"
 uv run python -m zoom_ai.cli start --instances 3
 ```
 
+## 测试功能说明
+
+### 1. 测试虚拟摄像头输出
+验证虚拟摄像头设备是否正常工作：
+```bash
+uv run python -m zoom_ai.cli test-camera --device /dev/video0
+```
+**效果**: 在虚拟摄像头中看到渐变色彩测试图案，持续10秒。
+
+### 2. 测试 Whisper 音频转录（终端显示）
+从麦克风捕获音频并使用 Whisper 转录，结果显示在终端：
+```bash
+# 中文转录（base 模型）
+uv run python -m zoom_ai.cli test-audio-captions --model base --language zh --duration 60
+
+# 英文转录
+uv run python -m zoom_ai.cli test-audio-captions --model base --language en --duration 60
+```
+**效果**: 终端实时显示转录文字，支持中英文自动识别。
+
+### 3. 测试 Whisper + 虚拟摄像头集成（推荐）
+从麦克风捕获音频，转录后叠加显示在虚拟摄像头画面上：
+```bash
+# 使用独立测试脚本
+python whisper_camera_overlay.py 60
+
+# 或使用 CLI 命令
+uv run python -m zoom_ai.cli test-wlk-camera --server-url ws://localhost:8000/asr --language zh --duration 60
+```
+**效果**:
+- 虚拟摄像头显示渐变背景 + 时间戳
+- 麦克风说话时，转录文字实时叠加在画面底部
+- 支持中文显示
+- 可在 Zoom 会议中直接看到字幕效果
+
+### 4. 测试 WhisperLiveKit 流式转录（超低延迟）
+需要先启动 WLK 服务器：
+```bash
+# 终端1: 启动 WLK 服务器
+uv run wlk --model base --language zh
+
+# 终端2: 测试 WLK 转录
+uv run python -m zoom_ai.cli test-wlk --duration 60
+
+# 或测试 WLK + 虚拟摄像头集成
+uv run python -m zoom_ai.cli test-wlk-camera --diarization --duration 60
+```
+**效果**:
+- 超低延迟转录（< 500ms）
+- 可选说话人识别（需要 NeMo）
+- 字幕叠加显示在虚拟摄像头
+
+### 5. 测试中文字符显示
+验证虚拟摄像头是否能正确渲染中文：
+```bash
+python test_chinese_camera.py
+```
+**效果**: 虚拟摄像头显示多种中文测试文字。
+
+## 测试效果对比
+
+| 测试方式 | 延迟 | 说话人识别 | 显示位置 | 推荐场景 |
+|---------|-----|-----------|---------|---------|
+| DOM 字幕 | 低 | × | 终端 | 需要 Zoom 会议 |
+| Whisper | 中(3-5s) | × | 终端/摄像头 | 简单转录 |
+| WLK 流式 | 低(<500ms) | ✓ | 终端/摄像头 | 实时会议 |
+| Whisper+摄像头 | 中(3-5s) | × | 摄像头 | 离线演示 |
+
 ### 字幕读取功能
 
 Zoom AI 支持三种方式读取会议字幕：

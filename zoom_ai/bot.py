@@ -21,6 +21,12 @@ from zoom_ai.wlk_captions import (
     WLKCaptionLogger,
     WhisperLiveKitServer,
 )
+from zoom_ai.wlk_camera_overlay import (
+    WLKCameraStreamer,
+    CaptionOverlayRenderer,
+    OverlayConfig,
+    ActiveSpeaker,
+)
 
 __all__ = [
     "ZoomBot",
@@ -38,4 +44,8 @@ __all__ = [
     "WLKCaptionEvent",
     "WLKCaptionLogger",
     "WhisperLiveKitServer",
+    "WLKCameraStreamer",
+    "CaptionOverlayRenderer",
+    "OverlayConfig",
+    "ActiveSpeaker",
 ]

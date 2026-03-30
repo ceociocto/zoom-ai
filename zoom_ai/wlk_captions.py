@@ -122,6 +122,7 @@ class WhisperLiveKitClient:
     async def _receive_loop(self):
         """Receive and process messages from the server."""
         message_count = 0
+        last_buffer_text = ""  # Track last buffer to avoid duplicates
 
         while self._is_running:
             try:
@@ -139,21 +140,27 @@ class WhisperLiveKitClient:
                     data = json.loads(message)
                     logger.debug(f"Received JSON: {data}")
 
-                    # Handle different message types
-                    msg_type = data.get("type", "")
+                    # Handle WLK server response format
+                    status = data.get("status", "")
 
-                    if msg_type == "transcription":
-                        await self._handle_transcription(data)
-                    elif msg_type == "ready":
-                        logger.info("Server is ready")
-                    elif msg_type == "ready_to_stop":
-                        logger.info("Server ready to stop")
-                        break
-                    elif msg_type == "error":
-                        logger.error(f"Server error: {data}")
-                        break
-                    else:
-                        logger.debug(f"Unknown message type: {msg_type}")
+                    # Check for transcription in buffer_transcription field
+                    buffer_text = data.get("buffer_transcription", "").strip()
+
+                    if buffer_text and buffer_text != last_buffer_text:
+                        last_buffer_text = buffer_text
+                        await self._handle_transcription_text(buffer_text, data)
+                    elif status == "active_transcription":
+                        # Check lines array for transcriptions
+                        lines = data.get("lines", [])
+                        for line in lines:
+                            line_text = line.get("text", "").strip()
+                            if line_text and line_text != last_buffer_text:
+                                last_buffer_text = line_text
+                                speaker_id = line.get("speaker", -2)
+                                await self._handle_transcription_text(line_text, data, speaker_id)
+                    elif status in ["no_audio_detected", "active_transcription"]:
+                        # Still processing, no new transcription
+                        pass
 
                 except json.JSONDecodeError:
                     logger.debug(f"Received non-JSON text: {message[:100]}")
@@ -167,6 +174,34 @@ class WhisperLiveKitClient:
             except Exception as e:
                 logger.error(f"Error in receive loop: {e}")
                 await asyncio.sleep(1)
+
+    async def _handle_transcription_text(self, text: str, data: dict, speaker_id: int = -2):
+        """Handle transcription text from server."""
+        if not text or len(text) < 1:
+            return
+
+        # Extract speaker if diarization enabled
+        speaker = None
+        if self.diarization:
+            if speaker_id >= 0:
+                speaker = f"Speaker {speaker_id}"
+            else:
+                speaker = f"Speaker {abs(speaker_id)}"
+
+        # Create caption event
+        event = WLKCaptionEvent(
+            text=text,
+            speaker=speaker,
+            confidence=data.get("confidence", 0.0),
+            language=data.get("language", self.language),
+            is_final=True,
+        )
+
+        logger.info(f"[WLK] [{speaker or 'Unknown'}] {text}")
+
+        # Trigger callback
+        if self._on_caption:
+            self._on_caption(event)
 
     async def _handle_transcription(self, data: dict):
         """Handle transcription message from server."""

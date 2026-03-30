@@ -198,11 +198,6 @@ class WhisperTranscriber:
         if np.abs(audio).max() > 1.0:
             audio = audio / 32768.0
 
-        # Resample if needed
-        if self.model.fps != 16000:
-            import librosa
-            audio = librosa.resample(audio, orig_sr=16000, target_sr=self.model.fps)
-
         # Transcribe
         result = self.model.transcribe(
             audio,
@@ -339,7 +334,10 @@ class AudioCaptionReader:
 
                     # Trigger callback
                     if self._on_caption:
+                        logger.debug(f"Triggering callback with: {event.text[:30]}...")
                         self._on_caption(event)
+                    else:
+                        logger.warning("No callback registered!")
                 else:
                     logger.debug("No transcription result")
 

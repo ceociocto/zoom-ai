@@ -169,6 +169,34 @@ def setup_parser() -> argparse.ArgumentParser:
         help="Enable speaker identification (requires NeMo)",
     )
 
+    # WLK + Camera integration test command
+    wlk_cam_parser = subparsers.add_parser("test-wlk-camera", help="Test WLK + Virtual Camera integration with speaker overlay")
+    wlk_cam_parser.add_argument(
+        "--server-url", "-s",
+        default="ws://localhost:8000/asr",
+        help="WhisperLiveKit server WebSocket URL",
+    )
+    wlk_cam_parser.add_argument(
+        "--duration", "-d",
+        type=int,
+        default=60,
+        help="Duration to run the test (seconds)",
+    )
+    wlk_cam_parser.add_argument(
+        "--language", "-l",
+        default="zh",
+        help="Language code (zh, en, auto, etc.)",
+    )
+    wlk_cam_parser.add_argument(
+        "--diarization",
+        action="store_true",
+        help="Enable speaker identification (requires NeMo)",
+    )
+    wlk_cam_parser.add_argument(
+        "--device",
+        help="Virtual camera device (default: auto-detect)",
+    )
+
     return parser
 
 
@@ -416,6 +444,25 @@ async def cmd_test_wlk(args: argparse.Namespace):
             await streamer.stop()
 
 
+async def cmd_test_wlk_camera(args: argparse.Namespace):
+    """Handle test-wlk-camera command - WLK + Virtual Camera integration."""
+    from zoom_ai.wlk_camera_overlay import test_wlk_camera_overlay
+
+    logger.info("Testing WLK + Virtual Camera integration...")
+    logger.info(f"Server: {args.server_url}")
+    logger.info(f"Duration: {args.duration} seconds")
+    logger.info(f"Language: {args.language}")
+    logger.info(f"Diarization: {args.diarization}")
+
+    exit_code = await test_wlk_camera_overlay(
+        wlk_server_url=args.server_url,
+        language=args.language,
+        diarization=args.diarization,
+        duration=args.duration,
+    )
+    return exit_code
+
+
 async def cmd_test_avatar(args: argparse.Namespace):
     """Handle test-avatar command."""
     from zoom_ai.avatar import AvatarRendererFactory
@@ -481,6 +528,9 @@ def main():
         sys.exit(exit_code)
     elif args.command == "test-wlk":
         exit_code = asyncio.run(cmd_test_wlk(args))
+        sys.exit(exit_code)
+    elif args.command == "test-wlk-camera":
+        exit_code = asyncio.run(cmd_test_wlk_camera(args))
         sys.exit(exit_code)
     else:
         parser.print_help()
