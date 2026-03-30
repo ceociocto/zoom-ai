@@ -7,7 +7,7 @@ Supports multiple instances with separate virtual cameras and audio devices.
 import asyncio
 import signal
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Callable, AsyncIterator
 
 from loguru import logger
 
@@ -15,6 +15,7 @@ from zoom_ai.avatar import AvatarRendererFactory
 from zoom_ai.camera import VirtualCamera, FrameBuffer
 from zoom_ai.config import settings, setup_logging
 from zoom_ai.tts import TTSManager
+from zoom_ai.captions import ZoomCaptionsReader, CaptionEvent, CaptionsLogger
 
 
 class ZoomBot:
@@ -53,10 +54,18 @@ class ZoomBot:
             fps=settings.output_fps,
         )
         self._tts = TTSManager()
+        self._captions_reader = ZoomCaptionsReader(
+            meeting_id=self.meeting_id,
+            meeting_password=self.meeting_password,
+            display_name=self.bot_name,
+            headless=settings.browser_headless,
+        )
+        self._captions_logger = CaptionsLogger(output_file=f"./logs/captions_{self.bot_name.replace(' ', '_')}.txt")
 
         # Runtime state
         self._is_running = False
         self._frame_buffer = FrameBuffer()
+        self._captions: list[CaptionEvent] = []
 
         logger.info(f"Zoom Bot initialized: {self.bot_name} @ /dev/video{self.device_index}")
 
@@ -88,6 +97,10 @@ class ZoomBot:
         self._is_running = True
         self._stream_task = asyncio.create_task(self._stream_frames())
 
+        # Start captions reader
+        self._captions_reader.on_caption(self._on_caption_received)
+        await self._captions_reader.start()
+
         # Join Zoom meeting
         await self._join_meeting()
 
@@ -112,6 +125,9 @@ class ZoomBot:
 
         # Leave meeting
         await self._leave_meeting()
+
+        # Stop captions reader
+        await self._captions_reader.stop()
 
         # Stop components
         await self._avatar.stop()
@@ -206,6 +222,58 @@ class ZoomBot:
         # Requires virtual microphone setup
         logger.warning("Listen not yet implemented")
         return ""
+
+    def _on_caption_received(self, event: CaptionEvent):
+        """Handle received caption event."""
+        self._captions.append(event)
+        self._captions_logger.on_caption(event)
+        logger.debug(f"Caption received: [{event.speaker or 'Unknown'}] {event.text[:50]}...")
+
+    async def get_captions(self) -> AsyncIterator[CaptionEvent]:
+        """
+        Get an async iterator of caption events.
+
+        Usage:
+            async for caption in bot.get_captions():
+                print(f"{caption.speaker}: {caption.text}")
+        """
+        while self._is_running:
+            if self._captions:
+                yield self._captions.pop(0)
+            else:
+                await asyncio.sleep(0.1)
+
+    def get_recent_captions(self, count: int = 10) -> list[CaptionEvent]:
+        """
+        Get the most recent captions.
+
+        Args:
+            count: Number of recent captions to return.
+
+        Returns:
+            List of recent caption events.
+        """
+        return self._captions[-count:] if self._captions else []
+
+    def get_all_captions(self) -> list[CaptionEvent]:
+        """Get all collected captions."""
+        return self._captions.copy()
+
+    def clear_captions(self):
+        """Clear collected captions."""
+        self._captions.clear()
+
+    async def read_captions_for_duration(self, duration: float) -> list[CaptionEvent]:
+        """
+        Read captions for a specific duration.
+
+        Args:
+            duration: Duration in seconds.
+
+        Returns:
+            List of caption events collected during the duration.
+        """
+        return await self._captions_reader.read_captions_for_duration(duration)
 
     async def run_forever(self):
         """Run the bot until stopped."""

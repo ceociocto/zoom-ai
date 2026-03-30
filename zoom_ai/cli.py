@@ -10,6 +10,7 @@ from loguru import logger
 
 from zoom_ai.bot import ZoomBot, MultiInstanceBotManager
 from zoom_ai.camera import VirtualCamera
+from zoom_ai.captions import ZoomCaptionsReader, CaptionsLogger, CaptionEvent
 from zoom_ai.config import settings, setup_logging
 
 
@@ -71,6 +72,101 @@ def setup_parser() -> argparse.ArgumentParser:
         type=int,
         default=10,
         help="Test duration in seconds",
+    )
+
+    # Captions test command
+    captions_parser = subparsers.add_parser("test-captions", help="Test captions reader")
+    captions_parser.add_argument(
+        "--meeting-id", "-m",
+        required=True,
+        help="Zoom meeting ID",
+    )
+    captions_parser.add_argument(
+        "--meeting-password", "-p",
+        help="Zoom meeting password",
+    )
+    captions_parser.add_argument(
+        "--duration", "-d",
+        type=int,
+        default=60,
+        help="Duration to capture captions (seconds)",
+    )
+    captions_parser.add_argument(
+        "--output", "-o",
+        help="Output file for captions",
+    )
+    captions_parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Run browser in headless mode (no visible window)",
+    )
+    captions_parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging to see all captured text",
+    )
+
+    # Audio captions test command (Whisper)
+    audio_captions_parser = subparsers.add_parser("test-audio-captions", help="Test audio captions with Whisper")
+    audio_captions_parser.add_argument(
+        "--model", "-m",
+        default="base",
+        choices=["tiny", "base", "small", "medium", "large"],
+        help="Whisper model size (default: base)",
+    )
+    audio_captions_parser.add_argument(
+        "--duration", "-d",
+        type=int,
+        default=60,
+        help="Duration to capture captions (seconds)",
+    )
+    audio_captions_parser.add_argument(
+        "--language", "-l",
+        default="zh",
+        help="Language code (zh, en, auto, etc.)",
+    )
+    audio_captions_parser.add_argument(
+        "--output", "-o",
+        help="Output file for captions",
+    )
+
+    # WhisperLiveKit test command
+    wlk_parser = subparsers.add_parser("test-wlk", help="Test WhisperLiveKit streaming captions")
+    wlk_parser.add_argument(
+        "--server-url", "-s",
+        default="ws://localhost:8000/asr",
+        help="WhisperLiveKit server WebSocket URL",
+    )
+    wlk_parser.add_argument(
+        "--model", "-m",
+        default="base",
+        choices=["tiny", "base", "small", "medium", "large-v3"],
+        help="WLK model size (for auto-start server)",
+    )
+    wlk_parser.add_argument(
+        "--duration", "-d",
+        type=int,
+        default=60,
+        help="Duration to capture captions (seconds)",
+    )
+    wlk_parser.add_argument(
+        "--language", "-l",
+        default="zh",
+        help="Language code (zh, en, auto, etc.)",
+    )
+    wlk_parser.add_argument(
+        "--output", "-o",
+        help="Output file for captions",
+    )
+    wlk_parser.add_argument(
+        "--auto-server",
+        action="store_true",
+        help="Automatically start WLK server",
+    )
+    wlk_parser.add_argument(
+        "--diarization",
+        action="store_true",
+        help="Enable speaker identification (requires NeMo)",
     )
 
     return parser
@@ -168,6 +264,158 @@ async def cmd_test_tts(args: argparse.Namespace):
     return 0
 
 
+async def cmd_test_captions(args: argparse.Namespace):
+    """Handle test-captions command."""
+    logger.info("Testing captions reader...")
+    logger.info(f"Meeting ID: {args.meeting_id}")
+    logger.info(f"Duration: {args.duration} seconds")
+    logger.info(f"Headless mode: {args.headless}")
+    logger.info(f"Debug mode: {args.debug}")
+
+    reader = ZoomCaptionsReader(
+        meeting_id=args.meeting_id,
+        meeting_password=args.meeting_password,
+        display_name="Caption Test Bot",
+        headless=args.headless,
+        debug=args.debug,
+    )
+
+    output_file = args.output or f"logs/captions_{args.meeting_id}.txt"
+
+    captions_logger = CaptionsLogger(output_file=output_file)
+    reader.on_caption(captions_logger.on_caption)
+
+    try:
+        await reader.start()
+        logger.info(f"Capturing captions for {args.duration} seconds...")
+        await asyncio.sleep(args.duration)
+
+        captions = captions_logger.get_all_captions()
+        logger.info(f"Captured {len(captions)} captions")
+        logger.info(f"Captions saved to: {output_file}")
+
+        return 0
+
+    except KeyboardInterrupt:
+        logger.info("Test interrupted by user")
+        return 0
+    except Exception as e:
+        logger.error(f"Captions test failed: {e}")
+        return 1
+    finally:
+        await reader.stop()
+
+
+async def cmd_test_audio_captions(args: argparse.Namespace):
+    """Handle test-audio-captions command."""
+    from zoom_ai.audio_captions import AudioCaptionReader, AudioCaptionLogger
+
+    logger.info("Testing audio caption reader (Whisper)...")
+    logger.info(f"Model: {args.model}")
+    logger.info(f"Duration: {args.duration} seconds")
+    logger.info(f"Language: {args.language}")
+
+    reader = AudioCaptionReader(
+        model_size=args.model,
+        language=args.language,
+    )
+
+    output_file = args.output or f"logs/audio_captions_{args.model}.txt"
+
+    captions_logger = AudioCaptionLogger(output_file=output_file)
+    reader.on_caption(captions_logger.on_caption)
+
+    try:
+        await reader.start()
+        logger.info(f"Capturing audio captions for {args.duration} seconds...")
+        logger.info("Speak into your microphone or play audio...")
+
+        await asyncio.sleep(args.duration)
+
+        captions = captions_logger.get_all_captions()
+        logger.info(f"Captured {len(captions)} captions")
+        logger.info(f"Captions saved to: {output_file}")
+
+        return 0
+
+    except KeyboardInterrupt:
+        logger.info("Test interrupted by user")
+        return 0
+    except Exception as e:
+        logger.error(f"Audio captions test failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+    finally:
+        await reader.stop()
+
+
+async def cmd_test_wlk(args: argparse.Namespace):
+    """Handle test-wlk command."""
+    from zoom_ai.wlk_captions import (
+        test_wlk_captions,
+        test_wlk_with_server,
+        WhisperLiveKitStreamer,
+        WLKCaptionLogger,
+    )
+
+    logger.info("Testing WhisperLiveKit captions...")
+
+    if args.auto_server:
+        # Auto-start server
+        logger.info(f"Auto-starting WLK server with model: {args.model}")
+        logger.info(f"Duration: {args.duration} seconds")
+        logger.info(f"Language: {args.language}")
+        logger.info(f"Diarization: {args.diarization}")
+
+        return await test_wlk_with_server(
+            model_size=args.model,
+            language=args.language,
+            duration=args.duration,
+            diarization=args.diarization,
+        )
+    else:
+        # Connect to existing server
+        logger.info(f"Connecting to WLK server: {args.server_url}")
+        logger.info(f"Duration: {args.duration} seconds")
+        logger.info(f"Language: {args.language}")
+        logger.info(f"Diarization: {args.diarization}")
+
+        output_file = args.output or "logs/wlk_captions.txt"
+
+        streamer = WhisperLiveKitStreamer(
+            server_url=args.server_url,
+            language=args.language,
+            diarization=args.diarization,
+        )
+
+        caption_logger = WLKCaptionLogger(output_file=output_file)
+        streamer.on_caption(caption_logger.on_caption)
+
+        try:
+            await streamer.start()
+            logger.info(f"Capturing for {args.duration} seconds...")
+
+            await asyncio.sleep(args.duration)
+
+            captions = caption_logger.get_all_captions()
+            logger.info(f"Captured {len(captions)} captions")
+            logger.info(f"Captions saved to: {output_file}")
+
+            return 0
+
+        except KeyboardInterrupt:
+            logger.info("Test interrupted by user")
+            return 0
+        except Exception as e:
+            logger.error(f"WLK test failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return 1
+        finally:
+            await streamer.stop()
+
+
 async def cmd_test_avatar(args: argparse.Namespace):
     """Handle test-avatar command."""
     from zoom_ai.avatar import AvatarRendererFactory
@@ -224,6 +472,15 @@ def main():
         sys.exit(exit_code)
     elif args.command == "test-avatar":
         exit_code = asyncio.run(cmd_test_avatar(args))
+        sys.exit(exit_code)
+    elif args.command == "test-captions":
+        exit_code = asyncio.run(cmd_test_captions(args))
+        sys.exit(exit_code)
+    elif args.command == "test-audio-captions":
+        exit_code = asyncio.run(cmd_test_audio_captions(args))
+        sys.exit(exit_code)
+    elif args.command == "test-wlk":
+        exit_code = asyncio.run(cmd_test_wlk(args))
         sys.exit(exit_code)
     else:
         parser.print_help()

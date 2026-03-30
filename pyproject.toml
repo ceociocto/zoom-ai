@@ -59,6 +59,15 @@ musetalk = [
     "diffusers>=0.24.0",
     "accelerate>=0.25.0",
 ]
+audio = [
+    "openai-whisper>=20231117",
+    "sounddevice>=0.4.6",
+    "pyaudio>=0.2.13",
+]
+wlk = [
+    "whisperlivekit>=0.2.0",
+    "websockets>=13.0",
+]
 
 [project.scripts]
 zoom-ai = "zoom_ai.cli:main"

@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     # Device index for multi-instance
     device_index: int = Field(default=0, alias="DEVICE_INDEX")
 
+    # Browser options
+    browser_headless: bool = Field(default=False, alias="BROWSER_HEADLESS")
+
     @field_validator("log_level")
     @classmethod
     def validate_log_level(cls, v: str) -> str:
