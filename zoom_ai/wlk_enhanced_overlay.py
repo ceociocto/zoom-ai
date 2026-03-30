@@ -12,6 +12,7 @@ Features:
 import asyncio
 import numpy as np
 import cv2
+import re
 from typing import Optional, Dict, List, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -23,6 +24,10 @@ from loguru import logger
 
 from zoom_ai.wlk_captions import WhisperLiveKitStreamer, WLKCaptionEvent
 from zoom_ai.camera import VirtualCamera
+
+
+# Sentence boundary patterns for Chinese and English
+SENTENCE_DELIMITERS = re.compile(r'[。！？\.!?]+')
 
 
 class CaptionStyle(Enum):
@@ -161,9 +166,13 @@ class EnhancedCaptionRenderer:
         self.config = config or EnhancedOverlayConfig()
         self._captions: deque = deque(maxlen=self.config.max_lines)
         self._speaker_names: Dict[str, str] = {}
+        # Track current active caption for each speaker
+        self._current_caption: Dict[str, CaptionItem] = {}
+        # Maximum characters per caption before forced split
+        self._max_caption_length = 50
 
     def on_caption(self, event: WLKCaptionEvent):
-        """Handle new caption event."""
+        """Handle new caption event - accumulates by speaker, splits at sentence boundaries."""
         speaker_id = event.speaker or "SPEAKER_0"
 
         # Generate friendly speaker name
@@ -171,17 +180,61 @@ class EnhancedCaptionRenderer:
             speaker_num = len(self._speaker_names) + 1
             self._speaker_names[speaker_id] = f"说话人 {speaker_num}"
 
-        # Create caption with animation
-        caption = CaptionItem(
-            text=event.text,
-            speaker=speaker_id,
-            timestamp=datetime.now(),
-            alpha=0.0,
-            y_offset=self.config.animation.slide_offset if self.config.animation.slide_in else 0
-        )
+        # Check if speaker has an active caption
+        if speaker_id in self._current_caption:
+            current = self._current_caption[speaker_id]
+            # Append new text to current caption
+            current.text += event.text
 
-        self._captions.append(caption)
-        logger.info(f"[{self._speaker_names[speaker_id]}] {event.text}")
+            # Check for sentence boundary or length limit
+            should_split = self._should_split_caption(current.text, event.text)
+
+            if should_split:
+                # Finalize current caption
+                self._captions.append(current)
+                del self._current_caption[speaker_id]
+                logger.info(f"[{self._speaker_names[speaker_id]}] {current.text}")
+            else:
+                # Caption updated in place (will be re-rendered with new text)
+                pass
+        else:
+            # Start new caption for this speaker
+            caption = CaptionItem(
+                text=event.text,
+                speaker=speaker_id,
+                timestamp=datetime.now(),
+                alpha=0.0,
+                y_offset=self.config.animation.slide_offset if self.config.animation.slide_in else 0
+            )
+            self._current_caption[speaker_id] = caption
+
+        # Add any finalized captions to display queue (they accumulate until speaker changes)
+        for sp_id, cap in list(self._current_caption.items()):
+            if sp_id != speaker_id:
+                # Different speaker finished - add their caption to queue
+                self._captions.append(cap)
+                del self._current_caption[sp_id]
+                logger.info(f"[{self._speaker_names[sp_id]}] {cap.text}")
+
+    def _should_split_caption(self, full_text: str, new_text: str) -> bool:
+        """Determine if caption should be split based on sentence boundary or length."""
+        # Check length limit
+        if len(full_text) >= self._max_caption_length:
+            return True
+
+        # Check if new text ends with sentence delimiter
+        if SENTENCE_DELIMITERS.search(new_text):
+            return True
+
+        # Check if new text starts with a common sentence starter (after stripping)
+        starters = ['但是', '然后', '所以', '因为', '如果', '不过', '而且', '另外',
+                   'But', 'Then', 'So', 'Because', 'If', 'However', 'Also']
+        stripped_new = new_text.strip()
+        for starter in starters:
+            if stripped_new.startswith(starter):
+                return True
+
+        return False
 
     def update_animations(self, dt: float):
         """Update animation states."""
@@ -189,7 +242,9 @@ class EnhancedCaptionRenderer:
         if not anim:
             return
 
-        for caption in self._captions:
+        # Update both finalized captions and active captions
+        all_captions = list(self._captions) + list(self._current_caption.values())
+        for caption in all_captions:
             # Fade in
             if caption.alpha < 1.0:
                 caption.alpha = min(1.0, caption.alpha + dt / anim.fade_in_duration)
@@ -197,6 +252,12 @@ class EnhancedCaptionRenderer:
             # Slide in
             if caption.y_offset > 0:
                 caption.y_offset = max(0, caption.y_offset - dt * 150)
+
+    def _get_display_captions(self) -> List[CaptionItem]:
+        """Get all captions to display (finalized + active)."""
+        finalized = list(self._captions)
+        active = list(self._current_caption.values())
+        return finalized + active
 
     def render(self, frame: np.ndarray) -> np.ndarray:
         """Render captions on frame."""
@@ -221,10 +282,9 @@ class EnhancedCaptionRenderer:
 
     def _render_modern(self, draw: ImageDraw.ImageDraw, width: int, height: int):
         """Render modern floating card style."""
-        if not self._captions:
+        captions = self._get_display_captions()
+        if not captions:
             return
-
-        captions = list(self._captions)
         line_height = self.config.line_height
         padding = self.config.padding
         margin = self.config.margin_sides
@@ -311,10 +371,9 @@ class EnhancedCaptionRenderer:
 
     def _render_chat(self, draw: ImageDraw.ImageDraw, width: int, height: int):
         """Render chat bubble style."""
-        if not self._captions:
+        captions = self._get_display_captions()
+        if not captions:
             return
-
-        captions = list(self._captions)
         padding = 15
         margin = 20
         bubble_height = 50
@@ -356,10 +415,11 @@ class EnhancedCaptionRenderer:
 
     def _render_karaoke(self, draw: ImageDraw.ImageDraw, width: int, height: int):
         """Render karaoke style."""
-        if not self._captions:
+        captions = self._get_display_captions()
+        if not captions:
             return
 
-        caption = self._captions[-1]  # Only show latest
+        caption = captions[-1]  # Only show latest
         font = ChineseFontLoader.get_font(int(self.config.font_size * 1.5))
 
         text = caption.text
@@ -401,10 +461,9 @@ class EnhancedCaptionRenderer:
 
     def _render_subtitle(self, draw: ImageDraw.ImageDraw, width: int, height: int):
         """Render traditional subtitle style."""
-        if not self._captions:
+        captions = self._get_display_captions()
+        if not captions:
             return
-
-        captions = list(self._captions)
         font = ChineseFontLoader.get_font(self.config.font_size)
 
         # Calculate total height
@@ -467,6 +526,7 @@ class EnhancedCaptionRenderer:
         """Clear all captions."""
         self._captions.clear()
         self._speaker_names.clear()
+        self._current_caption.clear()
 
 
 class EnhancedWLKStreamer:
