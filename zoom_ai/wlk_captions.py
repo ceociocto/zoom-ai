@@ -120,7 +120,7 @@ class WhisperLiveKitClient:
     async def _receive_loop(self):
         """Receive and process messages from the server."""
         message_count = 0
-        last_buffer_text = ""  # Track last buffer to avoid duplicates
+        last_processed_text = ""  # Track last processed text to extract delta only
 
         while self._is_running:
             try:
@@ -144,18 +144,33 @@ class WhisperLiveKitClient:
                     # Check for transcription in buffer_transcription field
                     buffer_text = data.get("buffer_transcription", "").strip()
 
-                    if buffer_text and buffer_text != last_buffer_text:
-                        last_buffer_text = buffer_text
-                        await self._handle_transcription_text(buffer_text, data)
+                    if buffer_text and buffer_text != last_processed_text:
+                        # Extract only new text (delta)
+                        if buffer_text.startswith(last_processed_text):
+                            new_text = buffer_text[len(last_processed_text):].strip()
+                        else:
+                            # Text doesn't start with previous (possible reset/correction)
+                            new_text = buffer_text
+
+                        if new_text:
+                            last_processed_text = buffer_text
+                            await self._handle_transcription_text(new_text, data)
                     elif status == "active_transcription":
                         # Check lines array for transcriptions
                         lines = data.get("lines", [])
                         for line in lines:
                             line_text = line.get("text", "").strip()
-                            if line_text and line_text != last_buffer_text:
-                                last_buffer_text = line_text
-                                speaker_id = line.get("speaker", -2)
-                                await self._handle_transcription_text(line_text, data, speaker_id)
+                            if line_text and line_text != last_processed_text:
+                                # Extract only new text (delta)
+                                if line_text.startswith(last_processed_text):
+                                    new_text = line_text[len(last_processed_text):].strip()
+                                else:
+                                    new_text = line_text
+
+                                if new_text:
+                                    last_processed_text = line_text
+                                    speaker_id = line.get("speaker", -2)
+                                    await self._handle_transcription_text(new_text, data, speaker_id)
                     elif status in ["no_audio_detected", "active_transcription"]:
                         # Still processing, no new transcription
                         pass
