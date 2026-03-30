@@ -138,6 +138,8 @@ uv run python -m zoom_ai.cli test-wlk-enhanced --style chat --duration 60      #
 uv run python -m zoom_ai.cli test-wlk-enhanced --style karaoke --duration 60  # 卡拉OK风格
 uv run python -m zoom_ai.cli test-wlk-enhanced --style subtitle --duration 60 # 传统字幕风格
 ```
+**重要提示**: 测试时请**对着麦克风说话**，才能看到字幕效果！系统正在捕获麦克风音频并实时转录。
+
 **效果**:
 - ✅ 完美中文显示
 - ✅ 说话人自动识别和颜色标记

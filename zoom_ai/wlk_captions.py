@@ -83,18 +83,16 @@ class WhisperLiveKitClient:
             )
             self._is_connected = True
 
-            # Note: WLK server config is set via command line args
-            # No need to send config message, just start receiving
-            logger.info("WebSocket connected, waiting for server ready message...")
+            logger.info("WebSocket connected, starting receive loop...")
 
-            # Start receiving messages
+            # Start receiving messages immediately
             self._is_running = True
             self._receive_task = asyncio.create_task(self._receive_loop())
 
-            # Wait a moment for connection to stabilize
-            await asyncio.sleep(1.0)
+            # Wait for connection to stabilize
+            await asyncio.sleep(0.5)
 
-            logger.info("Connected to WhisperLiveKit server")
+            logger.info("Connected to WhisperLiveKit server, ready to stream audio")
 
         except Exception as e:
             logger.error(f"Failed to connect to WhisperLiveKit: {e}")
@@ -242,17 +240,20 @@ class WhisperLiveKitClient:
             return
 
         try:
-            # Convert to int16 if needed (WLK expects int16 PCM)
-            if audio_data.dtype != np.int16:
-                if audio_data.dtype == np.float32 or audio_data.dtype == np.float64:
-                    # Clamp to [-1.0, 1.0] first to avoid overflow
-                    audio_data = np.clip(audio_data, -1.0, 1.0)
-                    audio_data = (audio_data * 32767).astype(np.int16)
-                else:
-                    audio_data = audio_data.astype(np.int16)
+            # Ensure audio is float32 and normalized to [-1.0, 1.0]
+            if audio_data.dtype == np.int16:
+                audio_data = audio_data.astype(np.float32) / 32768.0
+            elif audio_data.dtype != np.float32:
+                audio_data = audio_data.astype(np.float32)
+
+            # Clamp to valid range
+            audio_data = np.clip(audio_data, -1.0, 1.0)
+
+            # Convert to int16 PCM for WLK
+            audio_int16 = (audio_data * 32767).astype(np.int16)
 
             # Send as bytes
-            await self._websocket.send(audio_data.tobytes())
+            await self._websocket.send(audio_int16.tobytes())
 
         except Exception as e:
             logger.error(f"Error sending audio: {e}")
