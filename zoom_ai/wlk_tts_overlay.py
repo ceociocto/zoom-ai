@@ -3,7 +3,7 @@ WLK + TTS + Virtual Camera Integration
 
 Features:
 - Real-time speech recognition via WhisperLiveKit
-- Text-to-speech via GLM API
+- Text-to-speech via GLM API (streaming mode)
 - Sentence boundary detection for immediate TTS trigger
 - Virtual camera output with captions
 """
@@ -15,6 +15,7 @@ import cv2
 import tempfile
 import os
 import re
+import struct
 from typing import Optional, Dict, List, Tuple, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -26,6 +27,40 @@ from loguru import logger
 from zoom_ai.wlk_captions import WhisperLiveKitStreamer, WLKCaptionEvent
 from zoom_ai.camera import VirtualCamera
 from zoom_ai.virtual_audio import VirtualAudioPlayer
+
+
+def _pcm_to_wav(pcm_data: bytes, sample_rate: int = 24000, channels: int = 1, bits_per_sample: int = 16) -> bytes:
+    """
+    Wrap raw PCM data in a WAV container.
+
+    Args:
+        pcm_data: Raw PCM audio data
+        sample_rate: Sample rate in Hz (GLM TTS streaming uses 24000Hz)
+        channels: Number of audio channels (1=mono)
+        bits_per_sample: Bits per sample (16 for PCM16)
+
+    Returns:
+        WAV format audio data with headers
+    """
+    num_frames = len(pcm_data) // (bits_per_sample // 8)
+    byte_rate = sample_rate * channels * (bits_per_sample // 8)
+    block_align = channels * (bits_per_sample // 8)
+
+    # Build WAV header
+    wav_header = struct.pack('<4sI4s', b'RIFF', 36 + len(pcm_data), b'WAVE')
+    fmt_chunk = struct.pack('<4sIHHIIHH',
+        b'fmt ',           # Chunk ID
+        16,                # Chunk size
+        1,                 # Audio format (1 = PCM)
+        channels,          # Number of channels
+        sample_rate,       # Sample rate
+        byte_rate,         # Byte rate
+        block_align,       # Block align
+        bits_per_sample    # Bits per sample
+    )
+    data_chunk = struct.pack('<4sI', b'data', len(pcm_data))
+
+    return wav_header + fmt_chunk + data_chunk + pcm_data
 
 
 # Sentence ending patterns - Chinese and English
@@ -41,7 +76,8 @@ class GLMTTSConfig:
     voice: str = "female"
     speed: float = 1.0
     volume: float = 1.0
-    format: str = "wav"
+    format: str = "pcm"  # Stream mode only supports PCM
+    encode_format: str = "base64"  # or "hex" for stream encoding
     api_url: str = field(default_factory=lambda: os.getenv("GLM_TTS_API_URL", "https://open.bigmodel.cn/api/paas/v4/audio/speech"))
 
     # Playback settings
@@ -137,7 +173,16 @@ class ChineseFontLoader:
 
 
 class GLMTextToSpeech:
-    """GLM TTS API client with virtual audio support."""
+    """
+    GLM TTS API client with streaming support.
+
+    Uses streaming mode for faster response:
+    - API returns audio chunks via Server-Sent Events (SSE)
+    - Chunks are base64/hex encoded PCM data
+    - PCM is wrapped in WAV container for playback
+    - Sample rate: 24000 Hz (GLM TTS streaming default)
+    - Format: 16-bit PCM mono
+    """
 
     def __init__(self, config: GLMTTSConfig):
         """Initialize GLM TTS client."""
@@ -152,12 +197,13 @@ class GLMTextToSpeech:
             logger.warning("GLM_TTS_API_KEY 未设置 - 请在 .env 文件中配置")
 
         if config.use_virtual_audio:
+            # GLM TTS streaming returns 24kHz PCM
             self._virtual_player = VirtualAudioPlayer(
-                sample_rate=16000,
+                sample_rate=24000,
                 channels=1,
                 device=config.virtual_audio_device
             )
-            logger.info(f"Virtual audio player initialized: {self._virtual_player.device}")
+            logger.info(f"Virtual audio player initialized: {self._virtual_player.device} @ 24kHz")
 
     async def __aenter__(self):
         """Enter context manager."""
@@ -171,13 +217,13 @@ class GLMTextToSpeech:
 
     async def synthesize(self, text: str) -> Optional[bytes]:
         """
-        Synthesize speech from text using GLM TTS API.
+        Synthesize speech from text using GLM TTS API with streaming.
 
         Args:
             text: Text to synthesize
 
         Returns:
-            Audio data as bytes, or None if failed
+            Audio data as PCM bytes (16kHz, mono), or None if failed
         """
         if not text or len(text.strip()) < 1:
             return None
@@ -187,7 +233,7 @@ class GLMTextToSpeech:
             logger.info(f"[GLM TTS] Text too short ({len(text)} < {self.config.min_text_length}): {text}")
             return None
 
-        logger.info(f"[GLM TTS] 🎙️ 调用 API 合成语音: {text[:50]}{'...' if len(text) > 50 else ''}")
+        logger.info(f"[GLM TTS] 🎙️ 调用 API 合成语音 (流式): {text[:50]}{'...' if len(text) > 50 else ''}")
 
         try:
             if not self._session:
@@ -204,19 +250,113 @@ class GLMTextToSpeech:
                 "voice": self.config.voice,
                 "speed": self.config.speed,
                 "volume": self.config.volume,
-                "response_format": self.config.format
+                "response_format": "pcm",  # Stream mode only supports PCM
+                "stream": True,  # Enable streaming
+                "encode_format": self.config.encode_format,  # base64 or hex
             }
 
+            import base64
+
+            audio_chunks = []
             async with self._session.post(
                 self.config.api_url,
                 headers=headers,
                 json=payload,
                 timeout=aiohttp.ClientTimeout(total=30)
             ) as response:
+                logger.info(f"[GLM TTS] Response status: {response.status}, Content-Type: {response.headers.get('Content-Type')}")
+
                 if response.status == 200:
-                    audio_data = await response.read()
-                    logger.info(f"[GLM TTS] ✅ 获得 {len(audio_data)} 字节音频")
-                    return audio_data
+                    # Check if response is SSE or raw binary
+                    content_type = response.headers.get('Content-Type', '')
+                    logger.info(f"[GLM TTS] Content-Type: {content_type}")
+
+                    # Read all response data first
+                    all_data = b""
+                    async for chunk in response.content:
+                        all_data += chunk
+
+                    logger.info(f"[GLM TTS] Total response size: {len(all_data)} bytes")
+
+                    # Check content type priority
+                    if 'audio/' in content_type or 'application/octet-stream' in content_type:
+                        # Direct binary response (not SSE)
+                        logger.info(f"[GLM TTS] ✅ 收到二进制音频: {len(all_data)} 字节")
+
+                        # If it's already WAV format, return as-is
+                        if all_data.startswith(b'RIFF'):
+                            return all_data
+                        # Otherwise wrap as PCM
+                        else:
+                            return _pcm_to_wav(all_data, sample_rate=24000)
+
+                    # Parse as SSE (text/event-stream or default)
+                    logger.info("[GLM TTS] 解析 SSE 流...")
+                    buffer = all_data
+                    debug_lines = []
+                    raw_response = all_data
+
+                    # Process complete lines
+                    while b"\n" in buffer:
+                        line_bytes, buffer = buffer.split(b"\n", 1)
+                        line = line_bytes.decode('utf-8').strip()
+
+                        # Log first few lines for debugging
+                        if len(debug_lines) < 10:
+                            debug_lines.append(line[:100])
+                            if len(debug_lines) >= 3:
+                                logger.debug(f"[GLM TTS] SSE preview: {debug_lines}")
+
+                        # Skip empty lines and SSE control lines
+                        if not line or line.startswith(':') or line.startswith('event:'):
+                            continue
+
+                        # SSE format: "data: <base64_audio>" or "data: {"choices":[{"delta":{"content":"base64"}}]}"
+                        if line.startswith('data:'):
+                            data = line[5:].strip()  # Remove "data:" prefix
+
+                            # Check for JSON format
+                            if data.startswith('{') and data.endswith('}'):
+                                try:
+                                    import json
+                                    json_data = json.loads(data)
+                                    # Handle GLM TTS streaming format: {"choices":[{"delta":{"content":"base64"}}]}
+                                    if 'choices' in json_data and len(json_data['choices']) > 0:
+                                        delta = json_data['choices'][0].get('delta', {})
+                                        data = delta.get('content', '')
+                                    else:
+                                        # Fallback to direct fields
+                                        data = json_data.get('audio', json_data.get('data', ''))
+                                except json.JSONDecodeError:
+                                    pass
+
+                            if data and data != '[DONE]':
+                                try:
+                                    # Decode base64/hex encoded audio chunk
+                                    if self.config.encode_format == "base64":
+                                        # Try standard base64 first, then URL-safe
+                                        try:
+                                            chunk = base64.b64decode(data)
+                                        except Exception:
+                                            # Add padding if needed and try URL-safe
+                                            padded = data + '=' * (-len(data) % 4)
+                                            chunk = base64.urlsafe_b64decode(padded)
+                                    else:  # hex
+                                        chunk = bytes.fromhex(data)
+                                    audio_chunks.append(chunk)
+                                except Exception as e:
+                                    logger.debug(f"[GLM TTS] Skipping invalid chunk: {e}, data: {data[:50]}")
+
+                    if audio_chunks:
+                        pcm_data = b''.join(audio_chunks)
+                        # Wrap PCM in WAV for compatibility with audio players
+                        audio_data = _pcm_to_wav(pcm_data, sample_rate=24000)
+                        logger.info(f"[GLM TTS] ✅ 获得 {len(pcm_data)} 字节 PCM 音频 ({len(audio_chunks)} 个分块)")
+                        return audio_data
+                    else:
+                        raw_preview = raw_response[:500].decode('utf-8', errors='replace')
+                        logger.error(f"[GLM TTS] ❌ 未收到音频数据. Raw response preview: {raw_preview}")
+                        return None
                 else:
                     error_text = await response.text()
                     logger.error(f"[GLM TTS] ❌ API error {response.status}: {error_text}")
