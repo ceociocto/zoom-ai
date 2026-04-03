@@ -26,7 +26,6 @@ from loguru import logger
 
 from zoom_ai.wlk_captions import WhisperLiveKitStreamer, WLKCaptionEvent
 from zoom_ai.camera import VirtualCamera
-from zoom_ai.virtual_audio import VirtualAudioPlayer
 
 
 def _pcm_to_wav(pcm_data: bytes, sample_rate: int = 24000, channels: int = 1, bits_per_sample: int = 16) -> bytes:
@@ -190,7 +189,7 @@ class GLMTextToSpeech:
         self._session: Optional[aiohttp.ClientSession] = None
         self._is_playing = False
         self._play_queue: deque = deque()
-        self._virtual_player: Optional[VirtualAudioPlayer] = None
+        self._virtual_player: Optional['VirtualAudioPlayer'] = None  # type: ignore[name-defined]
 
         # 验证API密钥
         if not self.config.api_key:
@@ -198,6 +197,7 @@ class GLMTextToSpeech:
 
         if config.use_virtual_audio:
             # GLM TTS streaming returns 24kHz PCM
+            from zoom_ai.virtual_audio import VirtualAudioPlayer
             self._virtual_player = VirtualAudioPlayer(
                 sample_rate=24000,
                 channels=1,
@@ -735,6 +735,7 @@ class WLKStreamerWithTTS:
         camera_fps: int = 30,
         tts_config: Optional[GLMTTSConfig] = None,
         caption_style: Optional[CaptionStyle] = None,
+        input_device: Optional[int] = None,
     ):
         """Initialize streamer."""
         self.wlk_server_url = wlk_server_url
@@ -754,6 +755,7 @@ class WLKStreamerWithTTS:
             server_url=wlk_server_url,
             language=language,
             diarization=diarization,
+            input_device=input_device,
         )
 
         # TTS
@@ -972,6 +974,7 @@ async def test_wlk_tts(
     auto_tts: bool = True,
     use_virtual_audio: bool = False,
     virtual_audio_device: Optional[str] = None,
+    input_device: Optional[int] = None,
 ):
     """
     Test WLK + TTS integration with sentence-end detection.
@@ -998,6 +1001,7 @@ async def test_wlk_tts(
         language=language,
         diarization=diarization,
         tts_config=tts_config,
+        input_device=input_device,
     )
 
     try:

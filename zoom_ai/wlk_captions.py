@@ -136,10 +136,19 @@ class WhisperLiveKitClient:
                 # Parse JSON response
                 try:
                     data = json.loads(message)
-                    logger.debug(f"Received JSON: {data}")
+                    # Only log status changes and actual transcriptions
+                    status = data.get("status", "")
+                    buffer_text = data.get("buffer_transcription", "").strip()
+
+                    # Log important status changes
+                    if status == "no_audio_detected":
+                        logger.debug(f"[WLK] No audio detected")
+                    elif buffer_text:
+                        logger.info(f"[WLK Server] Transcribing: {buffer_text[:50]}...")
+                    elif status in ["active_transcription", "transcription_complete"]:
+                        logger.debug(f"[WLK] Status: {status}")
 
                     # Handle WLK server response format
-                    status = data.get("status", "")
 
                     # Check for transcription in buffer_transcription field
                     buffer_text = data.get("buffer_transcription", "").strip()
@@ -286,6 +295,7 @@ class WhisperLiveKitStreamer:
         server_url: str = "ws://localhost:8000/asr",
         language: str = "zh",
         diarization: bool = False,
+        input_device: Optional[int] = None,
     ):
         """
         Initialize WhisperLiveKit streamer.
@@ -294,10 +304,12 @@ class WhisperLiveKitStreamer:
             server_url: WebSocket URL of the WLK server.
             language: Language code.
             diarization: Enable speaker identification (requires NeMo).
+            input_device: Audio input device index (None for default).
         """
         self.server_url = server_url
         self.language = language
         self.diarization = diarization
+        self.input_device = input_device
 
         self._client = WhisperLiveKitClient(
             server_url=server_url,
@@ -319,7 +331,7 @@ class WhisperLiveKitStreamer:
         # Start audio capture
         from zoom_ai.audio_captions import AudioCapturer
 
-        self._audio_capturer = AudioCapturer(sample_rate=16000, channels=1)
+        self._audio_capturer = AudioCapturer(sample_rate=16000, channels=1, device=self.input_device)
         self._audio_capturer.start()
 
         # Connect to WLK server
@@ -370,11 +382,11 @@ class WhisperLiveKitStreamer:
                     energy = np.mean(np.abs(audio))
 
                     # Log first few chunks for debugging
-                    if chunk_count <= 5:
-                        logger.debug(f"Audio chunk {chunk_count}: {len(audio)} samples, energy: {energy:.6f}, dtype: {audio.dtype}")
+                    if chunk_count <= 3:
+                        logger.info(f"Audio chunk {chunk_count}: {len(audio)} samples, energy: {energy:.6f}")
 
-                    # Lower threshold for testing (0.0001 instead of 0.001)
-                    if energy > 0.0001:  # Skip silence
+                    # Lower threshold for testing (0.00001 instead of 0.0001)
+                    if energy > 0.00001:  # Skip silence - very low threshold
                         await self._client.send_audio(audio)
                         sent_count += 1
 

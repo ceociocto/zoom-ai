@@ -130,6 +130,9 @@ def setup_parser() -> argparse.ArgumentParser:
         help="Output file for captions",
     )
 
+    # List audio devices command
+    list_audio_parser = subparsers.add_parser("list-audio-devices", help="List available audio input devices")
+
     # WhisperLiveKit test command
     wlk_parser = subparsers.add_parser("test-wlk", help="Test WhisperLiveKit streaming captions")
     wlk_parser.add_argument(
@@ -228,6 +231,11 @@ def setup_parser() -> argparse.ArgumentParser:
     wlk_tts_parser.add_argument(
         "--audio-device",
         help="Virtual audio device name (e.g., 'BlackHole 2ch', 'Soundflower (2ch)')",
+    )
+    wlk_tts_parser.add_argument(
+        "--input-device", "-i",
+        type=int,
+        help="Audio input device index (use 'list-audio-devices' to see available devices)",
     )
     wlk_tts_parser.add_argument(
         "--setup-audio",
@@ -408,6 +416,13 @@ async def cmd_test_captions(args: argparse.Namespace):
         await reader.stop()
 
 
+def cmd_list_audio_devices(args: argparse.Namespace):
+    """Handle list-audio-devices command."""
+    from zoom_ai.audio_captions import AudioCapturer
+    AudioCapturer.list_devices()
+    return 0
+
+
 async def cmd_test_audio_captions(args: argparse.Namespace):
     """Handle test-audio-captions command."""
     from zoom_ai.audio_captions import AudioCaptionReader, AudioCaptionLogger
@@ -561,11 +576,11 @@ async def cmd_test_wlk_enhanced(args: argparse.Namespace):
 async def cmd_test_wlk_tts(args: argparse.Namespace):
     """Handle test-wlk-tts command - WLK + TTS integration."""
     from zoom_ai.wlk_tts_overlay import test_wlk_tts
-    from zoom_ai.virtual_audio import setup_virtual_audio_macos, setup_virtual_audio_linux
     import platform
 
     # Show setup instructions if requested
     if hasattr(args, 'setup_audio') and args.setup_audio:
+        from zoom_ai.virtual_audio import setup_virtual_audio_macos, setup_virtual_audio_linux
         print("\n" + "="*60)
         print("虚拟音频设置指南 (Virtual Audio Setup)")
         print("="*60)
@@ -589,6 +604,11 @@ async def cmd_test_wlk_tts(args: argparse.Namespace):
     if use_virtual_audio:
         logger.info(f"Virtual Audio: Enabled (device: {args.audio_device or 'auto'})")
 
+    # Get input device
+    input_device = getattr(args, 'input_device', None)
+    if input_device is not None:
+        logger.info(f"Input device: {input_device}")
+
     exit_code = await test_wlk_tts(
         wlk_server_url=args.server_url,
         language=args.language,
@@ -597,6 +617,7 @@ async def cmd_test_wlk_tts(args: argparse.Namespace):
         auto_tts=not args.no_tts,
         use_virtual_audio=use_virtual_audio,
         virtual_audio_device=getattr(args, 'audio_device', None),
+        input_device=input_device,
     )
     return exit_code
 
@@ -660,6 +681,9 @@ def main():
         sys.exit(exit_code)
     elif args.command == "test-captions":
         exit_code = asyncio.run(cmd_test_captions(args))
+        sys.exit(exit_code)
+    elif args.command == "list-audio-devices":
+        exit_code = cmd_list_audio_devices(args)
         sys.exit(exit_code)
     elif args.command == "test-audio-captions":
         exit_code = asyncio.run(cmd_test_audio_captions(args))
