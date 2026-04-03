@@ -197,6 +197,44 @@ def setup_parser() -> argparse.ArgumentParser:
         help="Virtual camera device (default: auto-detect)",
     )
 
+    # WLK + TTS test command
+    wlk_tts_parser = subparsers.add_parser("test-wlk-tts", help="Test WLK + TTS (text-to-speech) integration")
+    wlk_tts_parser.add_argument(
+        "--server-url", "-s",
+        default="ws://localhost:8000/asr",
+        help="WhisperLiveKit server WebSocket URL",
+    )
+    wlk_tts_parser.add_argument(
+        "--duration", "-d",
+        type=int,
+        default=60,
+        help="Duration to run the test (seconds)",
+    )
+    wlk_tts_parser.add_argument(
+        "--language", "-l",
+        default="zh",
+        help="Language code (zh, en, auto, etc.)",
+    )
+    wlk_tts_parser.add_argument(
+        "--no-tts",
+        action="store_true",
+        help="Disable TTS playback (captions only)",
+    )
+    wlk_tts_parser.add_argument(
+        "--virtual-audio",
+        action="store_true",
+        help="Use virtual audio device for Zoom (requires setup)",
+    )
+    wlk_tts_parser.add_argument(
+        "--audio-device",
+        help="Virtual audio device name (e.g., 'BlackHole 2ch', 'Soundflower (2ch)')",
+    )
+    wlk_tts_parser.add_argument(
+        "--setup-audio",
+        action="store_true",
+        help="Show virtual audio setup instructions and exit",
+    )
+
     # Enhanced WLK + Camera test command (with Chinese support)
     wlk_enhanced_parser = subparsers.add_parser("test-wlk-enhanced", help="Test Enhanced WLK + Virtual Camera with Chinese support and multiple styles")
     wlk_enhanced_parser.add_argument(
@@ -520,6 +558,49 @@ async def cmd_test_wlk_enhanced(args: argparse.Namespace):
     return exit_code
 
 
+async def cmd_test_wlk_tts(args: argparse.Namespace):
+    """Handle test-wlk-tts command - WLK + TTS integration."""
+    from zoom_ai.wlk_tts_overlay import test_wlk_tts
+    from zoom_ai.virtual_audio import setup_virtual_audio_macos, setup_virtual_audio_linux
+    import platform
+
+    # Show setup instructions if requested
+    if hasattr(args, 'setup_audio') and args.setup_audio:
+        print("\n" + "="*60)
+        print("虚拟音频设置指南 (Virtual Audio Setup)")
+        print("="*60)
+        if platform.system() == "Darwin":
+            print(setup_virtual_audio_macos())
+        elif platform.system() == "Linux":
+            print(setup_virtual_audio_linux())
+        else:
+            print(f"暂不支持 {platform.system()} 平台的虚拟音频设置")
+        print("\n设置完成后，重新运行命令并添加 --virtual-audio 参数")
+        return 0
+
+    logger.info("Testing WLK + TTS Integration...")
+    logger.info(f"Server: {args.server_url}")
+    logger.info(f"Duration: {args.duration} seconds")
+    logger.info(f"Language: {args.language}")
+    logger.info(f"TTS: {'Disabled' if args.no_tts else 'Enabled'}")
+
+    # Check if virtual audio is enabled
+    use_virtual_audio = hasattr(args, 'virtual_audio') and args.virtual_audio
+    if use_virtual_audio:
+        logger.info(f"Virtual Audio: Enabled (device: {args.audio_device or 'auto'})")
+
+    exit_code = await test_wlk_tts(
+        wlk_server_url=args.server_url,
+        language=args.language,
+        diarization=True,
+        duration=args.duration,
+        auto_tts=not args.no_tts,
+        use_virtual_audio=use_virtual_audio,
+        virtual_audio_device=getattr(args, 'audio_device', None),
+    )
+    return exit_code
+
+
 async def cmd_test_avatar(args: argparse.Namespace):
     """Handle test-avatar command."""
     from zoom_ai.avatar import AvatarRendererFactory
@@ -591,6 +672,9 @@ def main():
         sys.exit(exit_code)
     elif args.command == "test-wlk-enhanced":
         exit_code = asyncio.run(cmd_test_wlk_enhanced(args))
+        sys.exit(exit_code)
+    elif args.command == "test-wlk-tts":
+        exit_code = asyncio.run(cmd_test_wlk_tts(args))
         sys.exit(exit_code)
     else:
         parser.print_help()
