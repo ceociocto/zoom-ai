@@ -496,6 +496,7 @@ class WhisperLiveKitServer:
     def __init__(
         self,
         model_size: str = "base",
+        model_path: Optional[str] = None,
         language: str = "zh",
         diarization: bool = False,
         host: str = "localhost",
@@ -505,13 +506,15 @@ class WhisperLiveKitServer:
         Initialize server manager.
 
         Args:
-            model_size: Whisper model size.
+            model_size: Whisper model size (tiny, base, small, medium, large-v3, large-v3-turbo).
+            model_path: Custom model path or Hugging Face repo ID (e.g., mlx-community/ivrit-ai-whisper-large-v3-turbo-mlx). Overrides model_size.
             language: Language code.
             diarization: Enable speaker identification (requires NeMo).
             host: Server host.
             port: Server port.
         """
         self.model_size = model_size
+        self.model_path = model_path
         self.language = language
         self.diarization = diarization
         self.host = host
@@ -521,18 +524,27 @@ class WhisperLiveKitServer:
 
     async def start(self):
         """Start the WLK server."""
+        model = self.model_path or self.model_size
         logger.info(f"Starting WhisperLiveKit server on {self.host}:{self.port}")
-        logger.info(f"Command: wlk --model {self.model_size} --language {self.language} {'--diarization' if self.diarization else ''}")
+        logger.info(f"Model: {model}")
+        logger.info(f"Language: {self.language}")
+        if self.diarization:
+            logger.info(f"Diarization: enabled")
 
         cmd = [
             "uv",
             "run",
             "wlk",
-            "--model", self.model_size,
             "--language", self.language,
             "--host", self.host,
             "--port", str(self.port),
         ]
+
+        # Use --model-path for custom models, --model for built-in sizes
+        if self.model_path:
+            cmd.extend(["--model-path", self.model_path])
+        else:
+            cmd.extend(["--model", self.model_size])
 
         if self.diarization:
             cmd.append("--diarization")
@@ -545,15 +557,44 @@ class WhisperLiveKitServer:
             )
 
             # Start a task to log server output
-            asyncio.create_task(self._log_server_output())
+            log_task = asyncio.create_task(self._log_server_output())
 
-            # Wait for server to start
-            await asyncio.sleep(5)
+            # Wait for server to be ready (with longer timeout for model download)
+            # Custom models may need to be downloaded first
+            startup_timeout = 120 if self.model_path else 30  # 2min for custom models, 30s for built-in
+            logger.info(f"Waiting for WLK server to start (timeout: {startup_timeout}s)...")
 
-            if self._process.returncode is not None:
-                raise RuntimeError("WLK server failed to start")
+            # Wait for server and check if it's still running
+            start_time = asyncio.get_event_loop().time()
+            while True:
+                elapsed = asyncio.get_event_loop().time() - start_time
 
-            logger.info("WhisperLiveKit server started")
+                # Check if process died
+                if self._process.returncode is not None:
+                    raise RuntimeError(f"WLK server exited with code {self._process.returncode}")
+
+                # Check timeout with progress logging
+                if elapsed > startup_timeout:
+                    raise RuntimeError(f"WK server startup timeout after {startup_timeout}s")
+
+                # Log progress every 10s for long waits
+                if elapsed > 10 and int(elapsed) % 10 == 0:
+                    logger.info(f"Still waiting for WLK server... ({int(elapsed)}/{startup_timeout}s)")
+                    if self.model_path and elapsed < 30:
+                        logger.info("First time using this model? WLK may be downloading it...")
+
+                # Try to connect to verify server is ready
+                try:
+                    import websockets
+                    test_ws = await asyncio.wait_for(
+                        websockets.connect(f"ws://{self.host}:{self.port}/asr", close_timeout=1),
+                        timeout=1
+                    )
+                    await test_ws.close()
+                    logger.info("WhisperLiveKit server is ready")
+                    break
+                except (asyncio.TimeoutError, ConnectionRefusedError, OSError):
+                    await asyncio.sleep(1)
 
         except FileNotFoundError:
             logger.error("wlk command not found. Install with: pip install whisperlivekit")
@@ -564,14 +605,24 @@ class WhisperLiveKitServer:
 
     async def _log_server_output(self):
         """Log server output for debugging."""
+        async def read_stream(stream, prefix):
+            try:
+                while True:
+                    line = await stream.readline()
+                    if not line:
+                        break
+                    line = line.decode().strip()
+                    if line:
+                        logger.info(f"[WLK Server {prefix}] {line}")
+            except Exception as e:
+                logger.debug(f"Server {prefix} logging error: {e}")
+
         try:
-            while self._process and self._process.returncode is None:
-                line = await self._process.stdout.readline()
-                if not line:
-                    break
-                line = line.decode().strip()
-                if line:
-                    logger.info(f"[WLK Server] {line}")
+            # Read both stdout and stderr concurrently
+            await asyncio.gather(
+                read_stream(self._process.stdout, "out"),
+                read_stream(self._process.stderr, "err"),
+            )
         except Exception as e:
             logger.debug(f"Server logging error: {e}")
 
@@ -591,6 +642,7 @@ class WhisperLiveKitServer:
 
 async def test_wlk_with_server(
     model_size: str = "base",
+    model_path: Optional[str] = None,
     language: str = "zh",
     duration: int = 60,
     diarization: bool = False,
@@ -598,6 +650,7 @@ async def test_wlk_with_server(
     """Test WLK with auto-started server."""
     server = WhisperLiveKitServer(
         model_size=model_size,
+        model_path=model_path,
         language=language,
         diarization=diarization,
     )

@@ -68,16 +68,25 @@ SENTENCE_PAUSE_PATTERN = re.compile(r'[，、；;]')
 
 
 @dataclass
-class GLMTTSConfig:
-    """GLM TTS API configuration."""
-    api_key: str = field(default_factory=lambda: os.getenv("GLM_TTS_API_KEY", ""))
-    model: str = "glm-tts"
+class TTSConfig:
+    """TTS configuration - supports multiple backends."""
+    # Common settings
+    model: str = "glm-tts"  # glm-tts, qwen-mlx-tts, etc.
     voice: str = "female"
     speed: float = 1.0
-    volume: float = 1.0
+
+    # GLM TTS API settings (used when model starts with "glm-" or is "glm-tts")
+    api_key: str = field(default_factory=lambda: os.getenv("GLM_TTS_API_KEY", ""))
     format: str = "pcm"  # Stream mode only supports PCM
     encode_format: str = "base64"  # or "hex" for stream encoding
     api_url: str = field(default_factory=lambda: os.getenv("GLM_TTS_API_URL", "https://open.bigmodel.cn/api/paas/v4/audio/speech"))
+
+    # MLX TTS settings (used when model contains "mlx" or "qwen")
+    mlx_model_path: str = field(default_factory=lambda: os.getenv(
+        "QWEN3_TTS_MODEL_PATH",
+        "/Volumes/sn7100/jerry/.cache/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-Base/snapshots/downloaded"
+    ))
+    mlx_sample_rate: int = 24000  # Sample rate for MLX TTS
 
     # Playback settings
     auto_play: bool = True
@@ -89,6 +98,23 @@ class GLMTTSConfig:
     min_text_length: int = 2  # Minimum characters before TTS
     max_caption_length: int = 100  # Max characters per caption
     silence_timeout: float = 2.0  # Seconds of silence before treating as sentence end
+
+    @property
+    def backend(self) -> str:
+        """Determine TTS backend based on model name."""
+        model_lower = self.model.lower()
+        if model_lower.startswith("glm-") or model_lower == "glm-tts":
+            return "glm"
+        elif "qwen" in model_lower:
+            return "qwen"
+        elif "mlx" in model_lower:
+            return "mlx"
+        else:
+            return "glm"  # Default to GLM for backward compatibility
+
+
+# Backward compatibility alias
+GLMTTSConfig = TTSConfig
 
 
 @dataclass
@@ -171,9 +197,9 @@ class ChineseFontLoader:
         return ImageFont.load_default()
 
 
-class GLMTextToSpeech:
+class GLMTTSProvider:
     """
-    GLM TTS API client with streaming support.
+    GLM TTS API provider with streaming support.
 
     Uses streaming mode for faster response:
     - API returns audio chunks via Server-Sent Events (SSE)
@@ -183,8 +209,8 @@ class GLMTextToSpeech:
     - Format: 16-bit PCM mono
     """
 
-    def __init__(self, config: GLMTTSConfig):
-        """Initialize GLM TTS client."""
+    def __init__(self, config: TTSConfig):
+        """Initialize GLM TTS provider."""
         self.config = config
         self._session: Optional[aiohttp.ClientSession] = None
         self._is_playing = False
@@ -193,7 +219,7 @@ class GLMTextToSpeech:
 
         # 验证API密钥
         if not self.config.api_key:
-            logger.warning("GLM_TTS_API_KEY 未设置 - 请在 .env 文件中配置")
+            logger.warning("[GLM TTS] GLM_TTS_API_KEY 未设置 - 请在 .env 文件中配置")
 
         if config.use_virtual_audio:
             # GLM TTS streaming returns 24kHz PCM
@@ -230,10 +256,10 @@ class GLMTextToSpeech:
 
         text = text.strip()
         if len(text) < self.config.min_text_length:
-            logger.info(f"[GLM TTS] Text too short ({len(text)} < {self.config.min_text_length}): {text}")
+            logger.info(f"[TTS: {self.config.model}] Text too short ({len(text)} < {self.config.min_text_length}): {text}")
             return None
 
-        logger.info(f"[GLM TTS] 🎙️ 调用 API 合成语音 (流式): {text[:50]}{'...' if len(text) > 50 else ''}")
+        logger.info(f"[TTS: {self.config.model}] 🎙️ 调用 API 合成语音 (流式): {text[:50]}{'...' if len(text) > 50 else ''}")
 
         try:
             if not self._session:
@@ -453,6 +479,387 @@ class GLMTextToSpeech:
             return await self.play_audio(audio_data)
         logger.warning(f"[GLM TTS] ⚠️ 无音频数据，跳过播放")
         return False
+
+
+class QwenTTSProvider:
+    """
+    Qwen3-TTS provider using MLX backend.
+
+    Runs locally on Apple Silicon (M-series) Macs using MLX acceleration.
+    Model: Qwen/Qwen3-TTS-12Hz-1.7B-Base
+    """
+
+    def __init__(self, config: TTSConfig):
+        """Initialize Qwen TTS provider."""
+        self.config = config
+        self._model = None
+        self.sample_rate = 24000
+        self._virtual_player: Optional['VirtualAudioPlayer'] = None  # type: ignore[name-defined]
+
+        # Model path from config or env var
+        import os
+        self._model_path = os.getenv(
+            "QWEN3_TTS_MODEL_PATH",
+            config.model or "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
+        )
+        logger.info(f"[Qwen TTS] Model path: {self._model_path}")
+
+        if config.use_virtual_audio:
+            from zoom_ai.virtual_audio import VirtualAudioPlayer
+            self._virtual_player = VirtualAudioPlayer(
+                sample_rate=24000,  # Qwen3-TTS uses 24kHz
+                channels=1,
+                device=config.virtual_audio_device
+            )
+            logger.info(f"[Qwen TTS] Virtual audio player initialized: {self._virtual_player.device} @ 24kHz")
+
+    async def __aenter__(self):
+        """Enter context manager - load Qwen3-TTS model."""
+        from mlx_audio.tts.utils import load_model
+
+        logger.info(f"[Qwen TTS] Loading model from: {self._model_path}")
+
+        def load_model_sync():
+            self._model = load_model(self._model_path)
+            self.sample_rate = self._model.sample_rate
+            logger.info(f"[Qwen TTS] Model loaded: {self.sample_rate}Hz")
+            logger.info(f"[Qwen TTS] Supported languages: {self._model.get_supported_languages()}")
+
+        # Load model in thread to avoid blocking
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, load_model_sync)
+
+        return self
+
+    async def __aexit__(self, *args):
+        """Exit context manager - cleanup."""
+        import gc
+        if self._model is not None:
+            del self._model
+            self._model = None
+        gc.collect()
+
+    async def synthesize(self, text: str) -> Optional[bytes]:
+        """
+        Synthesize speech from text using Qwen3-TTS.
+
+        Args:
+            text: Text to synthesize
+
+        Returns:
+            Audio data as WAV bytes (24kHz), or None if failed
+        """
+        if not text or len(text.strip()) < 1:
+            return None
+
+        text = text.strip()
+        if len(text) < self.config.min_text_length:
+            logger.info(f"[Qwen TTS] Text too short ({len(text)} < {self.config.min_text_length}): {text}")
+            return None
+
+        logger.info(f"[Qwen TTS] 🎙️ 合成语音 (本地): {text[:50]}{'...' if len(text) > 50 else ''}")
+
+        try:
+            import numpy as np
+
+            def generate_audio():
+                # Detect language (simple heuristic)
+                lang_code = "chinese" if any('\u4e00' <= c <= '\u9fff' for c in text) else "english"
+
+                # Generate using MLX model
+                results = list(self._model.generate(
+                    text=text,
+                    lang_code=lang_code,
+                    verbose=False
+                ))
+
+                if results:
+                    result = results[0]
+                    audio = result.audio  # mx.array
+                    audio_np = np.array(audio)
+                    return audio_np
+                return None
+
+            # Run generation in thread to avoid blocking
+            loop = asyncio.get_event_loop()
+            audio_array = await loop.run_in_executor(None, generate_audio)
+
+            if audio_array is None:
+                logger.error(f"[Qwen TTS] ❌ 生成失败: 无音频输出")
+                return None
+
+            logger.info(f"[Qwen TTS] ✅ 生成音频: {len(audio_array)} samples @ {self.sample_rate}Hz")
+
+            # Convert to WAV
+            audio_int16 = (audio_array * 32767).astype(np.int16)
+            wav_data = _pcm_to_wav(audio_int16.tobytes(), sample_rate=self.sample_rate)
+
+            return wav_data
+
+        except Exception as e:
+            logger.error(f"[Qwen TTS] ❌ 合成失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    async def play_audio(self, audio_data: bytes) -> bool:
+        """Play audio data using virtual audio player or system audio player."""
+        if not audio_data:
+            return False
+
+        if self._virtual_player:
+            logger.info(f"[Qwen TTS] 🎧 播放到虚拟音频设备: {self._virtual_player.device}")
+            result = await self._virtual_player.play_audio_data(audio_data)
+            if result:
+                logger.info(f"[Qwen TTS] ✅ 虚拟音频播放完成")
+            else:
+                logger.error(f"[Qwen TTS] ❌ 虚拟音频播放失败")
+            return result
+
+        # Fallback to system audio player
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                temp_path = f.name
+                f.write(audio_data)
+
+            logger.debug(f"[Qwen TTS] Playing audio: {temp_path}")
+
+            proc = await asyncio.create_subprocess_exec("afplay", temp_path)
+            await proc.wait()
+
+            try:
+                os.unlink(temp_path)
+            except Exception:
+                pass
+
+            logger.info(f"[Qwen TTS] 🔊 播放完成")
+            return True
+
+        except Exception as e:
+            logger.error(f"[Qwen TTS] ❌ 播放失败: {e}")
+            return False
+
+    async def speak(self, text: str) -> bool:
+        """Synthesize and speak text."""
+        audio_data = await self.synthesize(text)
+        if audio_data:
+            logger.info(f"[Qwen TTS] 📢 开始播放语音...")
+            return await self.play_audio(audio_data)
+        logger.warning(f"[Qwen TTS] ⚠️ 无音频数据，跳过播放")
+        return False
+
+
+class MLXTTSProvider:
+    """
+    MLX-based TTS provider using mlx_audio library.
+
+    Runs locally on Apple Silicon (M-series) Macs with MLX acceleration.
+    Supports Qwen3-TTS and other MLX-compatible TTS models.
+    """
+
+    def __init__(self, config: TTSConfig):
+        """Initialize MLX TTS provider."""
+        self.config = config
+        self._model = None
+        self._virtual_player: Optional['VirtualAudioPlayer'] = None
+
+        if config.use_virtual_audio:
+            from zoom_ai.virtual_audio import VirtualAudioPlayer
+            self._virtual_player = VirtualAudioPlayer(
+                sample_rate=config.mlx_sample_rate,
+                channels=1,
+                device=config.virtual_audio_device
+            )
+            logger.info(f"[MLX TTS] Virtual audio player initialized: {self._virtual_player.device} @ {config.mlx_sample_rate}kHz")
+
+    async def __aenter__(self):
+        """Enter context manager - load MLX TTS model."""
+        from mlx_audio.tts.utils import load_model
+        import threading
+
+        logger.info(f"[MLX TTS] Loading model from: {self.config.mlx_model_path}")
+
+        def load_model():
+            self._model = load_model(self.config.mlx_model_path)
+            logger.info(f"[MLX TTS] Model loaded successfully")
+            logger.info(f"[MLX TTS] Supported languages: {self._model.get_supported_languages()}")
+            logger.info(f"[MLX TTS] Sample rate: {self._model.sample_rate}Hz")
+
+        # Load model in thread to avoid blocking
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, load_model)
+
+        return self
+
+    async def __aexit__(self, *args):
+        """Exit context manager - cleanup."""
+        if self._model is not None:
+            del self._model
+            self._model = None
+
+    async def synthesize(self, text: str) -> Optional[bytes]:
+        """
+        Synthesize speech from text using MLX TTS.
+
+        Args:
+            text: Text to synthesize
+
+        Returns:
+            Audio data as WAV bytes (24kHz), or None if failed
+        """
+        if not text or len(text.strip()) < 1:
+            return None
+
+        text = text.strip()
+        if len(text) < self.config.min_text_length:
+            logger.info(f"[MLX TTS] Text too short ({len(text)} < {self.config.min_text_length}): {text}")
+            return None
+
+        logger.info(f"[MLX TTS] 🎙️ 合成语音 (本地 MLX): {text[:50]}{'...' if len(text) > 50 else ''}")
+
+        try:
+            import numpy as np
+
+            def generate_audio():
+                # Generate audio using MLX model
+                results = list(self._model.generate(
+                    text=text,
+                    lang_code='chinese',
+                    verbose=False
+                ))
+                if results:
+                    result = results[0]
+                    audio = result.audio  # mx.array
+                    return np.array(audio)
+                return None
+
+            # Run generation in thread to avoid blocking
+            loop = asyncio.get_event_loop()
+            audio_array = await loop.run_in_executor(None, generate_audio)
+
+            if audio_array is None:
+                logger.error("[MLX TTS] ❌ 生成失败")
+                return None
+
+            logger.info(f"[MLX TTS] ✅ 生成音频: {len(audio_array)} samples @ {self.config.mlx_sample_rate}Hz")
+
+            # Convert to WAV
+            audio_int16 = (audio_array * 32767).astype(np.int16)
+            wav_data = _pcm_to_wav(audio_int16.tobytes(), sample_rate=self.config.mlx_sample_rate)
+
+            return wav_data
+
+        except Exception as e:
+            logger.error(f"[MLX TTS] ❌ 合成失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    async def play_audio(self, audio_data: bytes) -> bool:
+        """Play audio data using virtual audio player or system audio player."""
+        if not audio_data:
+            return False
+
+        if self._virtual_player:
+            logger.info(f"[MLX TTS] 🎧 播放到虚拟音频设备: {self._virtual_player.device}")
+            result = await self._virtual_player.play_audio_data(audio_data)
+            if result:
+                logger.info(f"[MLX TTS] ✅ 虚拟音频播放完成")
+            else:
+                logger.error(f"[MLX TTS] ❌ 虚拟音频播放失败")
+            return result
+
+        # Fallback to system audio player
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                temp_path = f.name
+                f.write(audio_data)
+
+            logger.debug(f"[MLX TTS] Playing audio: {temp_path}")
+
+            proc = await asyncio.create_subprocess_exec("afplay", temp_path)
+            await proc.wait()
+
+            try:
+                os.unlink(temp_path)
+            except Exception:
+                pass
+
+            logger.info(f"[MLX TTS] 🔊 播放完成")
+            return True
+
+        except Exception as e:
+            logger.error(f"[MLX TTS] ❌ 播放失败: {e}")
+            return False
+
+    async def speak(self, text: str) -> bool:
+        """Synthesize and speak text."""
+        audio_data = await self.synthesize(text)
+        if audio_data:
+            logger.info(f"[MLX TTS] 📢 开始播放语音...")
+            return await self.play_audio(audio_data)
+        logger.warning(f"[MLX TTS] ⚠️ 无音频数据，跳过播放")
+        return False
+
+
+class TextToSpeech:
+    """
+    Factory class for TTS providers.
+
+    Automatically selects the appropriate provider based on the model name:
+    - "glm-tts" or "glm-*" -> GLMTTSProvider (GLM API)
+    - "*mlx*" or "*qwen*" -> MLXTTSProvider (Local MLX)
+    - default -> GLMTTSProvider
+    """
+
+    def __init__(self, config: TTSConfig):
+        """Initialize TTS with appropriate provider."""
+        self.config = config
+        self._provider: Optional[Union[GLMTTSProvider, QwenTTSProvider, MLXTTSProvider]] = None
+
+    async def __aenter__(self):
+        """Enter context manager - initialize selected provider."""
+        backend = self.config.backend
+
+        if backend == "qwen":
+            logger.info(f"[TTS] Using Qwen backend (transformers) for model: {self.config.model}")
+            self._provider = QwenTTSProvider(self.config)
+        elif backend == "mlx":
+            logger.info(f"[TTS] Using MLX backend for model: {self.config.model}")
+            self._provider = MLXTTSProvider(self.config)
+        else:  # default to GLM
+            logger.info(f"[TTS] Using GLM backend for model: {self.config.model}")
+            self._provider = GLMTTSProvider(self.config)
+
+        await self._provider.__aenter__()
+        return self
+
+    async def __aexit__(self, *args):
+        """Exit context manager - cleanup provider."""
+        if self._provider:
+            await self._provider.__aexit__(*args)
+
+    async def synthesize(self, text: str) -> Optional[bytes]:
+        """Synthesize speech from text."""
+        if self._provider:
+            return await self._provider.synthesize(text)
+        return None
+
+    async def play_audio(self, audio_data: bytes) -> bool:
+        """Play audio data."""
+        if self._provider:
+            return await self._provider.play_audio(audio_data)
+        return False
+
+    async def speak(self, text: str) -> bool:
+        """Synthesize and speak text."""
+        if self._provider:
+            return await self._provider.speak(text)
+        return False
+
+
+# Backward compatibility alias
+GLMTextToSpeech = GLMTTSProvider
 
 
 class TTSOverlayRenderer:
@@ -760,7 +1167,7 @@ class WLKStreamerWithTTS:
 
         # TTS
         self._tts_config = tts_config or GLMTTSConfig()
-        self._tts: Optional[GLMTextToSpeech] = None
+        self._tts: Optional[TextToSpeech] = None
 
         # Overlay renderer with silence timeout
         self._overlay = TTSOverlayRenderer(
@@ -802,7 +1209,7 @@ class WLKStreamerWithTTS:
             raise
 
         # Initialize TTS
-        self._tts = await GLMTextToSpeech(self._tts_config).__aenter__()
+        self._tts = await TextToSpeech(self._tts_config).__aenter__()
 
         # Set TTS callback - triggers immediately on sentence end
         self._overlay.set_tts_callback(self._on_caption_finalized)
@@ -815,6 +1222,7 @@ class WLKStreamerWithTTS:
 
         logger.info("WLK + TTS Streamer started")
         logger.info(f"Camera: {self._camera.device} @ {self._camera.width}x{self._camera.height}")
+        logger.info(f"TTS Model: {self._tts_config.model}")
         logger.info(f"TTS will trigger on: sentence end (。！？.!?) OR {self._tts_config.silence_timeout}s silence")
 
     async def stop(self):
@@ -975,6 +1383,7 @@ async def test_wlk_tts(
     use_virtual_audio: bool = False,
     virtual_audio_device: Optional[str] = None,
     input_device: Optional[int] = None,
+    model: str = "glm-tts",
 ):
     """
     Test WLK + TTS integration with sentence-end detection.
@@ -987,13 +1396,16 @@ async def test_wlk_tts(
         auto_tts: Enable automatic TTS playback
         use_virtual_audio: Use virtual audio device for Zoom
         virtual_audio_device: Virtual audio device name
+        model: TTS model to use (default: glm-tts)
     """
     logger.info("Testing WLK + TTS Integration...")
+    logger.info(f"TTS Model: {model}")
 
     tts_config = GLMTTSConfig(
         auto_play=auto_tts,
         use_virtual_audio=use_virtual_audio,
         virtual_audio_device=virtual_audio_device,
+        model=model,
     )
 
     streamer = WLKStreamerWithTTS(
@@ -1011,6 +1423,7 @@ async def test_wlk_tts(
         print("🎤 WLK + TTS 测试已启动!")
         print(f"📢 请对着麦克风说话")
         print(f"🔊 TTS: {'✅ 启用' if auto_tts else '❌ 禁用'}")
+        print(f"🤖 TTS Model: {model}")
         print(f"🎧 虚拟音频: {'✅ 启用' if use_virtual_audio else '❌ 禁用'}")
         print(f"📍 虚拟摄像头: {streamer._camera.device}")
         print(f"⏱️  测试时长: {duration} 秒")

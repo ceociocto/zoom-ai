@@ -110,8 +110,12 @@ def setup_parser() -> argparse.ArgumentParser:
     wlk_parser.add_argument(
         "--model", "-m",
         default="base",
-        choices=["tiny", "base", "small", "medium", "large-v3"],
+        choices=["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"],
         help="WLK model size (for auto-start server)",
+    )
+    wlk_parser.add_argument(
+        "--model-path",
+        help="Custom model path or Hugging Face repo ID (e.g., mlx-community/ivrit-ai-whisper-large-v3-turbo-mlx). Overrides --model.",
     )
     wlk_parser.add_argument(
         "--duration", "-d",
@@ -205,6 +209,13 @@ def setup_parser() -> argparse.ArgumentParser:
         help="Audio input device index (use 'list-audio-devices' to see available devices)",
     )
     wlk_tts_parser.add_argument(
+        "--model",
+        default="glm-tts",
+        help="TTS model to use (default: glm-tts). Backend is auto-selected: "
+             "glm-tts/glm-* -> GLM API (requires GLM_TTS_API_KEY), "
+             "*mlx*/*qwen* -> MLX local TTS (experimental)",
+    )
+    wlk_tts_parser.add_argument(
         "--setup-audio",
         action="store_true",
         help="Show virtual audio setup instructions and exit",
@@ -244,6 +255,58 @@ def setup_parser() -> argparse.ArgumentParser:
         "--no-diarization",
         action="store_true",
         help="Disable speaker identification",
+    )
+
+    # MLX Audio test command (STT & TTS)
+    mlx_parser = subparsers.add_parser("test-mlx-audio", help="Test MLX Audio STT & TTS (Apple Silicon only)")
+    mlx_parser.add_argument(
+        "mode",
+        choices=["stt", "tts", "full", "list-models"],
+        help="Test mode: stt (speech-to-text), tts (text-to-speech), full (stt+tts), list-models",
+    )
+    mlx_parser.add_argument(
+        "--audio", "-a",
+        help="Input audio file path (for stt/full modes)",
+    )
+    mlx_parser.add_argument(
+        "--mic", "-m",
+        action="store_true",
+        help="Use microphone for audio input (for stt/full modes)",
+    )
+    mlx_parser.add_argument(
+        "--duration", "-d",
+        type=float,
+        default=5.0,
+        help="Recording duration in seconds (for --mic, default: 5.0)",
+    )
+    mlx_parser.add_argument(
+        "--text", "-t",
+        help="Text to synthesize (for tts/full modes)",
+    )
+    mlx_parser.add_argument(
+        "--stt-model",
+        default="base",
+        choices=["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"],
+        help="STT model size (default: base)",
+    )
+    mlx_parser.add_argument(
+        "--tts-model",
+        default="speecht5",
+        help="TTS model name (default: speecht5)",
+    )
+    mlx_parser.add_argument(
+        "--language", "-l",
+        default="zh",
+        help="Language code (default: zh)",
+    )
+    mlx_parser.add_argument(
+        "--output", "-o",
+        help="Output audio file path (for tts mode)",
+    )
+    mlx_parser.add_argument(
+        "--play", "-p",
+        action="store_true",
+        help="Play synthesized audio (for tts mode)",
     )
 
     return parser
@@ -405,13 +468,15 @@ async def cmd_test_wlk(args: argparse.Namespace):
 
     if args.auto_server:
         # Auto-start server
-        logger.info(f"Auto-starting WLK server with model: {args.model}")
+        model = args.model_path or args.model
+        logger.info(f"Auto-starting WLK server with model: {model}")
         logger.info(f"Duration: {args.duration} seconds")
         logger.info(f"Language: {args.language}")
         logger.info(f"Diarization: {args.diarization}")
 
         return await test_wlk_with_server(
             model_size=args.model,
+            model_path=args.model_path,
             language=args.language,
             duration=args.duration,
             diarization=args.diarization,
@@ -534,6 +599,10 @@ async def cmd_test_wlk_tts(args: argparse.Namespace):
     if input_device is not None:
         logger.info(f"Input device: {input_device}")
 
+    # Get TTS model
+    tts_model = getattr(args, 'model', 'glm-tts')
+    logger.info(f"TTS Model: {tts_model}")
+
     exit_code = await test_wlk_tts(
         wlk_server_url=args.server_url,
         language=args.language,
@@ -543,6 +612,7 @@ async def cmd_test_wlk_tts(args: argparse.Namespace):
         use_virtual_audio=use_virtual_audio,
         virtual_audio_device=getattr(args, 'audio_device', None),
         input_device=input_device,
+        model=tts_model,
     )
     return exit_code
 
@@ -584,6 +654,85 @@ async def cmd_test_avatar(args: argparse.Namespace):
         camera.close()
 
 
+def cmd_test_mlx_audio(args: argparse.Namespace) -> int:
+    """Handle test-mlx-audio command - MLX Audio STT & TTS testing."""
+    from zoom_ai.test_mlx_audio import (
+        check_installation,
+        MLXSTTTester,
+        MLXTTSTester,
+        MLXFullPipeline,
+        list_models,
+    )
+
+    logger.info("Testing MLX Audio...")
+
+    # list-models 模式不需要检查安装
+    if args.mode == "list-models":
+        print("可用的 STT 模型:")
+        for name, path in list_models().get("stt", {}).items():
+            print(f"  {name}: {path}")
+        print("\n可用的 TTS 模型:")
+        for name, path in list_models().get("tts", {}).items():
+            print(f"  {name}: {path}")
+        print("\n注意: MLX Audio 仅支持 Apple Silicon (M系列芯片)")
+        return 0
+
+    # 其他模式需要检查安装
+    if not check_installation():
+        logger.error("请先安装 MLX Audio 依赖:")
+        logger.error("  uv add --optional mlx mlx-audio sounddevice scipy")
+        logger.error("  uv sync --extra mlx")
+        return 1
+
+    try:
+        if args.mode == "stt":
+            stt = MLXSTTTester(model=args.stt_model, language=args.language)
+            if args.audio:
+                text = stt.transcribe_file(args.audio)
+                return 0 if text else 1
+            elif args.mic:
+                text = stt.transcribe_mic(duration=args.duration)
+                return 0 if text else 1
+            else:
+                logger.error("请指定 --audio 或 --mic")
+                return 1
+
+        elif args.mode == "tts":
+            tts = MLXTTSTester(model=args.tts_model)
+            text = args.text or "你好，这是测试。"
+            if args.play:
+                result = tts.synthesize_and_play(text)
+            else:
+                output = tts.synthesize(text, args.output)
+                result = output is not None
+            return 0 if result else 1
+
+        elif args.mode == "full":
+            pipeline = MLXFullPipeline(
+                stt_model=args.stt_model,
+                tts_model=args.tts_model,
+                language=args.language,
+            )
+            if args.audio:
+                result = pipeline.test_with_file(args.audio)
+            elif args.mic:
+                result = pipeline.test_with_mic(duration=args.duration)
+            else:
+                logger.error("请指定 --audio 或 --mic")
+                return 1
+            return 0 if result else 1
+
+    except ImportError as e:
+        logger.error(f"MLX Audio 导入失败: {e}")
+        logger.info("请运行: uv add --optional mlx mlx-audio sounddevice scipy && uv sync --extra mlx")
+        return 1
+    except Exception as e:
+        logger.error(f"MLX Audio 测试失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
 def main():
     """Main entry point."""
     parser = setup_parser()
@@ -621,6 +770,9 @@ def main():
         sys.exit(exit_code)
     elif args.command == "test-wlk-tts":
         exit_code = asyncio.run(cmd_test_wlk_tts(args))
+        sys.exit(exit_code)
+    elif args.command == "test-mlx-audio":
+        exit_code = cmd_test_mlx_audio(args)
         sys.exit(exit_code)
     else:
         parser.print_help()
