@@ -10,8 +10,7 @@
 - **多实例**: 单服务器运行多个 Bot 实例
 - **Docker部署**: 完整的容器化支持
 - **字幕读取**:
-  - **DOM 方式**: 监听 Zoom web 端字幕元素
-  - **Whisper 音频**: 批处理转录 (稳定)
+  - **MLX Whisper**: 本地转录，适合 Apple Silicon (稳定)
   - **WhisperLiveKit**: 超低延迟流式转录 + 说话人识别 ⭐推荐
 
 ## 快速开始
@@ -41,9 +40,6 @@ sudo ./scripts/setup.sh
 ```bash
 # uv 会自动创建虚拟环境并安装 pyproject.toml 中的依赖
 uv sync
-
-# 安装 Playwright 浏览器
-uv run playwright install chromium
 ```
 
 ### 4. 配置
@@ -59,11 +55,12 @@ nano .env  # 编辑配置
 # 测试虚拟摄像头 (Linux)
 uv run python -m zoom_ai.cli test-camera
 
-# 方式1: DOM 字幕读取 (需要加入 Zoom 会议)
-uv run python -m zoom_ai.cli test-captions --meeting-id "xxx" --duration 60
-
-# 方式2: 音频转录 (使用 Whisper，直接捕获麦克风音频)
+# 方式1: 音频转录 (使用 MLX Whisper，直接捕获麦克风音频)
 uv run python -m zoom_ai.cli test-audio-captions --model base --duration 60
+
+# 方式2: WhisperLiveKit 流式字幕 (超低延迟，推荐)
+# 先启动 WLK 服务器: uv run wlk --model base --language zh
+# 然后测试: uv run python -m zoom_ai.cli test-wlk --duration 60
 
 # 启动单个实例
 uv run python -m zoom_ai.cli start --meeting-id "xxx" --meeting-password "xxx"
@@ -167,41 +164,22 @@ python test_chinese_camera.py
 
 | 测试方式 | 延迟 | 说话人识别 | 中文支持 | 显示位置 | 推荐场景 |
 |---------|-----|-----------|---------|---------|---------|
-| DOM 字幕 | 低 | × | ✓ | 终端 | 需要 Zoom 会议 |
-| Whisper | 中(3-5s) | × | ✓ | 终端/摄像头 | 简单转录 |
+| MLX Whisper | 中(3-5s) | × | ✓ | 终端/摄像头 | 本地转录 |
 | WLK 流式 | 低(<500ms) | ✓ | × | 终端/摄像头 | 实时会议 |
 | WLK 增强版 | 低(<500ms) | ✓ | ✓ | 摄像头 | **推荐** |
-| Whisper+摄像头 | 中(3-5s) | × | ✓ | 摄像头 | 离线演示 |
 
 ### 字幕读取功能
 
-Zoom AI 支持三种方式读取会议字幕：
+Zoom AI 支持两种高效方式读取会议字幕：
 
-#### 方式1: DOM 监听 (需要加入 Zoom web 会议)
-
-```python
-from zoom_ai import ZoomCaptionsReader, CaptionsLogger
-
-reader = ZoomCaptionsReader(
-    meeting_id="123456789",
-    display_name="AI Assistant"
-)
-
-logger = CaptionsLogger(output_file="captions.txt")
-reader.on_caption(logger.on_caption)
-
-await reader.start()
-# 字幕将实时保存到文件
-```
-
-#### 方式2: Whisper 音频转录 (批处理)
+#### 方式1: MLX Whisper 音频转录 (本地批处理)
 
 ```python
-from zoom_ai import AudioCaptionReader, AudioCaptionLogger
+from zoom_ai.audio_captions import AudioCaptionReader, AudioCaptionLogger
 
 reader = AudioCaptionReader(
-    model_size="base",  # tiny, base, small, medium, large
-    language="zh",      # zh, en, auto
+    model_size="medium",  # tiny, base, small, medium, large
+    language="zh",        # zh, en, auto
 )
 
 logger = AudioCaptionLogger(output_file="audio_captions.txt")
@@ -293,11 +271,11 @@ await streamer.start()
 │  └─────────────────────────────────────────────────────────┘        │
 │                                                                     │
 │  ┌─────────────────────────────────────────────────────┐            │
-│  │           字幕读取 (三种方式)                          │            │
-│  │  ┌───────────┐  ┌───────────┐  ┌─────────────┐      │            │
-│  │  │ DOM 监听  │  │ Whisper   │  │WLK 流式     │      │            │
-│  │  │          │  │ 批处理    │  │ ⭐推荐     │      │            │
-│  │  └───────────┘  └───────────┘  └─────────────┘      │            │
+│  │           字幕读取 (两种方式)                          │            │
+│  │  ┌───────────┐  ┌─────────────────────────────┐      │            │
+│  │  │ MLX      │  │     WLK 流式    ⭐推荐    │      │            │
+│  │  │ Whisper   │  │  (超低延迟+说话人识别)      │      │            │
+│  │  └───────────┘  └─────────────────────────────┘      │            │
 │  └─────────────────────────────────────────────────────┘            │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -329,9 +307,8 @@ zoom-ai/
 | 虚拟摄像头 | v4l2loopback |
 | 视频推流 | FFmpeg |
 | TTS服务 | Azure / ElevenLabs / Edge TTS |
-| 字幕读取(DOM) | Playwright |
-| 字幕读取(Whisper) | OpenAI Whisper + sounddevice |
-| 字幕读取(WLK) | WhisperLiveKit (Simul-Whisper + Sortformer) |
+| 字幕读取(本地) | MLX Whisper (Apple Silicon) |
+| 字幕读取(流式) | WhisperLiveKit (Simul-Whisper + Sortformer) |
 | 包管理 | uv |
 | 容器化 | Docker |
 

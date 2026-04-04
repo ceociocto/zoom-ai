@@ -16,11 +16,11 @@ edge-tts>=6.1.0
 # Virtual camera (Linux)
 pyv4l2>=0.1.0
 
-# Zoom SDK / Bot
-# Option 1: Playwright for web automation
-playwright>=1.40.0
-# Option 2: Zoom Meeting SDK (requires license)
-# zoom-meeting-sdk>=1.0.0
+# Caption reading (audio-based, NOT DOM-based)
+# Option 1: MLX Whisper (Apple Silicon) - local, fast
+# mlx-whisper
+# Option 2: WhisperLiveKit - ultra-low latency streaming
+# whisperlivekit sounddevice
 
 # Avatar generation
 torch>=2.0.0

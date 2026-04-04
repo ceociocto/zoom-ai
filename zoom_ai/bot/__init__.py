@@ -7,7 +7,7 @@ Supports multiple instances with separate virtual cameras and audio devices.
 import asyncio
 import signal
 from pathlib import Path
-from typing import Optional, Callable, AsyncIterator
+from typing import Optional, Callable, AsyncIterator, List
 
 from loguru import logger
 
@@ -15,12 +15,26 @@ from zoom_ai.avatar import AvatarRendererFactory
 from zoom_ai.camera import VirtualCamera, FrameBuffer
 from zoom_ai.config import settings, setup_logging
 from zoom_ai.tts import TTSManager
-from zoom_ai.captions import ZoomCaptionsReader, CaptionEvent, CaptionsLogger
+
+
+class CaptionEvent:
+    """A caption event."""
+    text: str
+    speaker: Optional[str] = None
+    timestamp: Optional[str] = None
+
+    def __init__(self, text: str, speaker: Optional[str] = None, timestamp: Optional[str] = None):
+        self.text = text
+        self.speaker = speaker
+        self.timestamp = timestamp
 
 
 class ZoomBot:
     """
     Zoom Bot instance for joining meetings with virtual avatar.
+
+    Uses audio-based caption reading (WhisperLiveKit or MLX Whisper)
+    instead of DOM-based approaches for better performance.
     """
 
     def __init__(
@@ -29,6 +43,7 @@ class ZoomBot:
         meeting_password: Optional[str] = None,
         bot_name: Optional[str] = None,
         device_index: Optional[int] = None,
+        caption_reader: Optional[object] = None,
     ):
         """
         Initialize Zoom Bot.
@@ -38,6 +53,7 @@ class ZoomBot:
             meeting_password: Zoom meeting password.
             bot_name: Display name for the bot.
             device_index: Virtual camera device index.
+            caption_reader: Optional caption reader (AudioCaptionReader or WhisperLiveKitStreamer).
         """
         self.meeting_id = meeting_id or settings.meeting_id
         self.meeting_password = meeting_password or settings.meeting_password
@@ -54,20 +70,28 @@ class ZoomBot:
             fps=settings.output_fps,
         )
         self._tts = TTSManager()
-        self._captions_reader = ZoomCaptionsReader(
-            meeting_id=self.meeting_id,
-            meeting_password=self.meeting_password,
-            display_name=self.bot_name,
-            headless=settings.browser_headless,
-        )
-        self._captions_logger = CaptionsLogger(output_file=f"./logs/captions_{self.bot_name.replace(' ', '_')}.txt")
+
+        # Caption reader (audio-based, not DOM-based)
+        self._caption_reader = caption_reader
+        self._captions: List[CaptionEvent] = []
 
         # Runtime state
         self._is_running = False
         self._frame_buffer = FrameBuffer()
-        self._captions: list[CaptionEvent] = []
 
         logger.info(f"Zoom Bot initialized: {self.bot_name} @ /dev/video{self.device_index}")
+
+    def set_caption_reader(self, reader):
+        """
+        Set the caption reader (AudioCaptionReader or WhisperLiveKitStreamer).
+
+        Args:
+            reader: Caption reader instance with on_caption() method.
+        """
+        self._caption_reader = reader
+        if reader:
+            reader.on_caption(self._on_caption_received)
+        logger.info(f"Caption reader set: {type(reader).__name__}")
 
     async def start(self):
         """Start the bot and join the meeting."""
@@ -97,9 +121,12 @@ class ZoomBot:
         self._is_running = True
         self._stream_task = asyncio.create_task(self._stream_frames())
 
-        # Start captions reader
-        self._captions_reader.on_caption(self._on_caption_received)
-        await self._captions_reader.start()
+        # Start caption reader if provided
+        if self._caption_reader:
+            logger.info("Starting caption reader...")
+            if hasattr(self._caption_reader, 'start'):
+                await self._caption_reader.start()
+            logger.info("Caption reader started")
 
         # Join Zoom meeting
         await self._join_meeting()
@@ -126,8 +153,10 @@ class ZoomBot:
         # Leave meeting
         await self._leave_meeting()
 
-        # Stop captions reader
-        await self._captions_reader.stop()
+        # Stop caption reader
+        if self._caption_reader and hasattr(self._caption_reader, 'stop'):
+            logger.info("Stopping caption reader...")
+            await self._caption_reader.stop()
 
         # Stop components
         await self._avatar.stop()
@@ -141,10 +170,9 @@ class ZoomBot:
         Join the Zoom meeting.
 
         This is a placeholder for the actual Zoom integration.
-        Options for implementation:
-        1. Zoom Meeting SDK (requires license)
-        2. Playwright/Selenium automation of Zoom web client
-        3. Third-party service (Recall.ai, etc.)
+
+        Note: The recommended approach is to use audio-based caption reading
+        (WhisperLiveKit or local Whisper) rather than DOM-based approaches.
         """
         logger.info("Joining Zoom meeting...")
         logger.warning("Zoom meeting integration not yet implemented")
@@ -152,21 +180,12 @@ class ZoomBot:
         logger.info(f"Bot name: {self.bot_name}")
         logger.info(f"Virtual camera: /dev/video{self.device_index}")
 
-        # TODO: Implement actual Zoom join logic
-        # Example using Playwright:
-        # async with async_playwright() as p:
-        #     browser = await p.chromium.launch()
-        #     context = await browser.new_context(
-        #         permissions=["camera", "microphone"],
-        #     )
-        #     page = await context.new_page()
-        #     await page.goto(f"https://zoom.us/j/{self.meeting_id}")
-        #     # ... interact with page to join meeting
+        if self._caption_reader:
+            logger.info("Caption reading is enabled (audio-based)")
 
     async def _leave_meeting(self):
         """Leave the Zoom meeting."""
         logger.info("Leaving Zoom meeting...")
-        # TODO: Implement actual Zoom leave logic
 
     async def _stream_frames(self):
         """
@@ -212,22 +231,29 @@ class ZoomBot:
         """
         Listen to meeting audio and transcribe.
 
+        Note: This requires audio capture setup. Use WhisperLiveKitStreamer
+        or AudioCaptionReader for caption reading instead.
+
         Args:
             duration: Listen duration in seconds.
 
         Returns:
             Transcribed text.
         """
-        # TODO: Implement audio capture and transcription
-        # Requires virtual microphone setup
-        logger.warning("Listen not yet implemented")
+        logger.warning("Listen not yet implemented - use caption reader instead")
         return ""
 
-    def _on_caption_received(self, event: CaptionEvent):
+    def _on_caption_received(self, event):
         """Handle received caption event."""
-        self._captions.append(event)
-        self._captions_logger.on_caption(event)
-        logger.debug(f"Caption received: [{event.speaker or 'Unknown'}] {event.text[:50]}...")
+        # Convert different event types to CaptionEvent
+        if hasattr(event, 'text'):
+            caption = CaptionEvent(
+                text=event.text,
+                speaker=getattr(event, 'speaker', None),
+                timestamp=getattr(event, 'timestamp', None)
+            )
+            self._captions.append(caption)
+            logger.debug(f"Caption received: [{caption.speaker or 'Unknown'}] {caption.text[:50]}...")
 
     async def get_captions(self) -> AsyncIterator[CaptionEvent]:
         """
@@ -262,18 +288,6 @@ class ZoomBot:
     def clear_captions(self):
         """Clear collected captions."""
         self._captions.clear()
-
-    async def read_captions_for_duration(self, duration: float) -> list[CaptionEvent]:
-        """
-        Read captions for a specific duration.
-
-        Args:
-            duration: Duration in seconds.
-
-        Returns:
-            List of caption events collected during the duration.
-        """
-        return await self._captions_reader.read_captions_for_duration(duration)
 
     async def run_forever(self):
         """Run the bot until stopped."""

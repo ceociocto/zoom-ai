@@ -28,9 +28,6 @@ sudo ./scripts/setup.sh
 
 # Create virtual environment and install dependencies
 uv sync
-
-# Install Playwright browsers
-uv run playwright install chromium
 ```
 
 ### macOS
@@ -41,9 +38,6 @@ uv run playwright install chromium
 
 # Create virtual environment and install dependencies
 uv sync
-
-# Install Playwright browsers
-uv run playwright install chromium
 
 # Start OBS and enable Virtual Camera
 ```
@@ -90,17 +84,6 @@ uv run python -m zoom_ai.cli test-avatar --duration 10
 ```
 
 This streams the avatar to the virtual camera for 10 seconds.
-
-### Test Captions Reader
-
-```bash
-uv run python -m zoom_ai.cli test-captions \
-    --meeting-id "123456789" \
-    --duration 60 \
-    --output captions.txt
-```
-
-This joins a Zoom meeting and captures live captions for 60 seconds.
 
 ### Test Audio Captions (Whisper)
 

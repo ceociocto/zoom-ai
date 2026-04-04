@@ -25,29 +25,6 @@ RUN apt-get update && apt-get install -y \
     libportaudio2 \
     libportaudiocpp0 \
     ffmpeg \
-    # 浏览器依赖 (Playwright)
-    wget \
-    gnupg \
-    ca-certificates \
-    fonts-liberation \
-    libasound2 \
-    libatk-bridge2.0-0 \
-    libatk1.0-0 \
-    libatspi2.0-0 \
-    libcups2 \
-    libdbus-1-3 \
-    libdrm2 \
-    libgbm1 \
-    libgtk-3-0 \
-    libnspr4 \
-    libnss3 \
-    libwayland-client0 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxfixes3 \
-    libxkbcommon0 \
-    libxrandr2 \
-    xdg-utils \
     # 其他工具
     curl \
     git \
@@ -66,10 +43,6 @@ COPY pyproject.toml .
 
 # 安装Python依赖
 RUN pip3 install --no-cache-dir -r requirements.txt
-
-# 安装Playwright浏览器
-RUN playwright install chromium
-RUN playwright install-deps chromium
 
 # 复制项目代码
 COPY zoom_ai/ ./zoom_ai/

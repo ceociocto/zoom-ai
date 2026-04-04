@@ -10,7 +10,6 @@ from loguru import logger
 
 from zoom_ai.bot import ZoomBot, MultiInstanceBotManager
 from zoom_ai.camera import VirtualCamera
-from zoom_ai.captions import ZoomCaptionsReader, CaptionsLogger, CaptionEvent
 from zoom_ai.config import settings, setup_logging
 
 
@@ -72,38 +71,6 @@ def setup_parser() -> argparse.ArgumentParser:
         type=int,
         default=10,
         help="Test duration in seconds",
-    )
-
-    # Captions test command
-    captions_parser = subparsers.add_parser("test-captions", help="Test captions reader")
-    captions_parser.add_argument(
-        "--meeting-id", "-m",
-        required=True,
-        help="Zoom meeting ID",
-    )
-    captions_parser.add_argument(
-        "--meeting-password", "-p",
-        help="Zoom meeting password",
-    )
-    captions_parser.add_argument(
-        "--duration", "-d",
-        type=int,
-        default=60,
-        help="Duration to capture captions (seconds)",
-    )
-    captions_parser.add_argument(
-        "--output", "-o",
-        help="Output file for captions",
-    )
-    captions_parser.add_argument(
-        "--headless",
-        action="store_true",
-        help="Run browser in headless mode (no visible window)",
-    )
-    captions_parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Enable debug logging to see all captured text",
     )
 
     # Audio captions test command (Whisper)
@@ -374,48 +341,6 @@ async def cmd_test_tts(args: argparse.Namespace):
     return 0
 
 
-async def cmd_test_captions(args: argparse.Namespace):
-    """Handle test-captions command."""
-    logger.info("Testing captions reader...")
-    logger.info(f"Meeting ID: {args.meeting_id}")
-    logger.info(f"Duration: {args.duration} seconds")
-    logger.info(f"Headless mode: {args.headless}")
-    logger.info(f"Debug mode: {args.debug}")
-
-    reader = ZoomCaptionsReader(
-        meeting_id=args.meeting_id,
-        meeting_password=args.meeting_password,
-        display_name="Caption Test Bot",
-        headless=args.headless,
-        debug=args.debug,
-    )
-
-    output_file = args.output or f"logs/captions_{args.meeting_id}.txt"
-
-    captions_logger = CaptionsLogger(output_file=output_file)
-    reader.on_caption(captions_logger.on_caption)
-
-    try:
-        await reader.start()
-        logger.info(f"Capturing captions for {args.duration} seconds...")
-        await asyncio.sleep(args.duration)
-
-        captions = captions_logger.get_all_captions()
-        logger.info(f"Captured {len(captions)} captions")
-        logger.info(f"Captions saved to: {output_file}")
-
-        return 0
-
-    except KeyboardInterrupt:
-        logger.info("Test interrupted by user")
-        return 0
-    except Exception as e:
-        logger.error(f"Captions test failed: {e}")
-        return 1
-    finally:
-        await reader.stop()
-
-
 def cmd_list_audio_devices(args: argparse.Namespace):
     """Handle list-audio-devices command."""
     from zoom_ai.audio_captions import AudioCapturer
@@ -678,9 +603,6 @@ def main():
         sys.exit(exit_code)
     elif args.command == "test-avatar":
         exit_code = asyncio.run(cmd_test_avatar(args))
-        sys.exit(exit_code)
-    elif args.command == "test-captions":
-        exit_code = asyncio.run(cmd_test_captions(args))
         sys.exit(exit_code)
     elif args.command == "list-audio-devices":
         exit_code = cmd_list_audio_devices(args)

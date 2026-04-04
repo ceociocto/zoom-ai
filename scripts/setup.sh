@@ -56,31 +56,6 @@ apt-get install -y \
     libportaudiocpp0 \
     alsa-utils
 
-# Browser dependencies (for Playwright)
-apt-get install -y \
-    wget \
-    gnupg \
-    ca-certificates \
-    fonts-liberation \
-    libasound2 \
-    libatk-bridge2.0-0 \
-    libatk1.0-0 \
-    libatspi2.0-0 \
-    libcups2 \
-    libdbus-1-3 \
-    libdrm2 \
-    libgbm1 \
-    libgtk-3-0 \
-    libnspr4 \
-    libnss3 \
-    libwayland-client0 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxfixes3 \
-    libxkbcommon0 \
-    libxrandr2 \
-    xdg-utils
-
 # Other utilities
 apt-get install -y \
     git \
@@ -142,8 +117,8 @@ echo "Next steps:"
 echo "1. Create virtual environment and install dependencies:"
 echo "   uv sync"
 echo ""
-echo "2. Install Playwright browsers:"
-echo "   uv run playwright install chromium"
+echo "2. Install WhisperLiveKit for audio captioning (optional, recommended):"
+echo "   uv pip install whisperlivekit sounddevice"
 echo ""
 echo "3. Copy .env.example to .env and configure:"
 echo "   cp .env.example .env"

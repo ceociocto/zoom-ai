@@ -3,10 +3,12 @@ Zoom Bot module entry point.
 
 This module provides the main bot functionality for running
 the Zoom AI virtual avatar assistant.
+
+Uses audio-based caption reading (WhisperLiveKit or MLX Whisper)
+instead of inefficient DOM-based approaches.
 """
 
-from zoom_ai.bot import ZoomBot, MultiInstanceBotManager
-from zoom_ai.captions import ZoomCaptionsReader, CaptionEvent, CaptionsLogger
+from zoom_ai.bot import ZoomBot, MultiInstanceBotManager, CaptionEvent
 from zoom_ai.audio_captions import (
     AudioCaptionReader,
     AudioCaptionEvent,
@@ -31,9 +33,7 @@ from zoom_ai.wlk_camera_overlay import (
 __all__ = [
     "ZoomBot",
     "MultiInstanceBotManager",
-    "ZoomCaptionsReader",
     "CaptionEvent",
-    "CaptionsLogger",
     "AudioCaptionReader",
     "AudioCaptionEvent",
     "AudioCaptionLogger",

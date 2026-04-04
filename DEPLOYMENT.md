@@ -14,10 +14,6 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 # Create virtual environment and install dependencies
 uv sync
 
-# Install Playwright browsers
-uv run playwright install chromium
-uv run playwright install-deps chromium
-
 # Configure environment
 cp .env.example .env
 # Edit .env with your settings
@@ -37,9 +33,6 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Create virtual environment and install dependencies
 uv sync
-
-# Install Playwright browsers
-uv run playwright install chromium
 
 # Configure environment
 cp .env.example .env
@@ -178,7 +171,6 @@ sudo apt install -y nvidia-driver-535
 # Continue with regular setup
 curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync
-uv run playwright install chromium
 ```
 
 ### Google Cloud Platform
