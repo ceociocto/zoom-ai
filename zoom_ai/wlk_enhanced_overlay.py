@@ -41,9 +41,9 @@ class CaptionStyle(Enum):
 @dataclass
 class AnimationConfig:
     """Animation configuration."""
-    fade_in_duration: float = 0.3  # seconds
+    fade_in_duration: float = 0.25  # seconds (snappier, more premium)
     slide_in: bool = True
-    slide_offset: int = 50  # pixels
+    slide_offset: int = 40  # pixels (subtle slide effect)
 
 
 @dataclass
@@ -63,38 +63,45 @@ class CaptionItem:
 
 @dataclass
 class EnhancedOverlayConfig:
-    """Enhanced caption overlay configuration."""
+    """Enhanced caption overlay configuration.
+
+    Design System: Modern/Friendly
+    - Warmer dark background for comfort during long meetings
+    - Distinct speaker colors for easy differentiation
+    - Generous padding for readability
+    - Smooth animations for premium feel
+    """
     # Style
     style: CaptionStyle = CaptionStyle.MODERN
 
     # Layout
     position: str = "bottom"  # "top", "bottom", "center"
     max_lines: int = 5
-    line_height: int = 55
-    padding: int = 20
+    line_height: int = 52  # Tighter for multi-line readability
+    padding: int = 24  # More breathing room
     margin_sides: int = 30
 
     # Font (will use Chinese font)
     font_size: int = 36
     speaker_font_size: int = 28
 
-    # Colors (BGR)
-    background_color: tuple = (20, 20, 30)  # Dark blue-gray
-    background_alpha: float = 0.85
-    text_color: tuple = (255, 255, 255)
+    # Colors (BGR) — Design System: Modern/Friendly
+    background_color: tuple = (24, 24, 28)  # Softer dark, closer to modern apps
+    background_alpha: float = 0.90  # More opaque for better readability
+    text_color: tuple = (250, 250, 249)  # Warm white, not pure white
     speaker_colors: List[tuple] = field(default_factory=lambda: [
-        (255, 107, 107),  # Red
-        (78, 205, 196),   # Teal
-        (255, 230, 109),  # Yellow
-        (133, 193, 233),  # Blue
-        (255, 121, 198),  # Pink
-        (162, 155, 254),  # Purple
+        (59, 130, 246),   # Blue — Speaker 1
+        (139, 92, 246),   # Purple — Speaker 2
+        (16, 185, 129),   # Green — Speaker 3
+        (245, 158, 11),   # Orange — Speaker 4
+        (236, 72, 153),   # Pink — Speaker 5
+        (20, 184, 166),   # Teal — Speaker 6
     ])
 
     # Effects
-    rounded_corners: int = 15
-    shadow_blur: int = 20
-    shadow_offset: Tuple[int, int] = (0, 4)
+    rounded_corners: int = 16  # Friendlier, more rounded
+    shadow_blur: int = 25  # Softer shadow
+    shadow_offset: Tuple[int, int] = (0, 6)  # More depth
 
     # Animation
     animation: Optional[AnimationConfig] = field(default_factory=AnimationConfig)
@@ -123,17 +130,25 @@ class ChineseFontLoader:
 
     @classmethod
     def _load_font(cls, size: int) -> ImageFont.FreeTypeFont:
-        """Load font with fallback chain."""
+        """Load font with fallback chain.
+
+        Design System Priority:
+        1. PingFang SC (macOS) — Modern, clean, excellent readability
+        2. Noto Sans CJK (Linux) — Open source, widely available
+        3. WQY Zenhei (Linux) — Fallback for older systems
+        """
         font_paths = [
-            # macOS Chinese fonts
-            "/System/Library/Fonts/STHeiti Light.ttc",
-            "/System/Library/Fonts/PingFang.ttc",
-            "/System/Library/Fonts/Hiragino Sans GB.ttc",
-            # Linux fonts
-            "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+            # macOS — Design System primary: PingFang SC
+            "/System/Library/Fonts/PingFang.ttc",  # Modern, clean
+            "/System/Library/Fonts/Hiragino Sans GB.ttc",  # Backup
+            "/System/Library/Fonts/STHeiti Light.ttc",  # Legacy fallback
+            # Linux — Design System primary: Noto Sans CJK
             "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
             "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-            # Fallback
+            "/usr/share/fonts/truetype/noto/NotoSansCJKtc-Regular.otf",
+            # Linux — Fallback
+            "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+            # Ultimate fallback
             None,
         ]
 
